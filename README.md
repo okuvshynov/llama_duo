@@ -9,7 +9,7 @@ Apple M1 (16GB RAM) runs Llama3-8B-Instruct @ Q8 and Apple M2 (24GB RAM) runs Ll
 Example of configuration which doesn't get much value:
 Apple M1 (16GB RAM) + Apple M2 Ultra (192GB RAM). M2 Ultra is order of magnitude faster and second model is unable to keep up.
 
-Edit: more plans on this [here](https://github.com/ggerganov/llama.cpp/discussions/6853#discussioncomment-9473072)
+Edit: more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and [here](https://github.com/ggerganov/llama.cpp/discussions/6853#discussioncomment-9473072)
 
 There's likely more room for improvement by:
 1. Doing tree-based speculation/multiple sequences (potentially with more ```back``` services);
