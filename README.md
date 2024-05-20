@@ -9,11 +9,9 @@ Apple M1 (16GB RAM) runs Llama3-8B-Instruct @ Q8 and Apple M2 (24GB RAM) runs Ll
 Example of configuration which doesn't get much value:
 Apple M1 (16GB RAM) + Apple M2 Ultra (192GB RAM). M2 Ultra is order of magnitude faster and second model is unable to keep up.
 
-Edit: more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and [here](https://github.com/ggerganov/llama.cpp/discussions/6853#discussioncomment-9473072)
+The important potential appliaction for this approach would be to use speculation to speed up evaluation of huge models (e.g. hopefully upcoming llama3-405B), when the main model itself will be split between multiple devices and the 'spare compute' they would have will be used to speculate remotely.
+more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and [here](https://github.com/ggerganov/llama.cpp/discussions/6853#discussioncomment-9473072)
 
-There's likely more room for improvement by:
-1. Doing tree-based speculation/multiple sequences (potentially with more ```back``` services);
-2. Combining sync/async speculation, where we might still do some local in-place speculation if all asyncronously generated tokens were rejected.
 
 ## Dependencies
 
