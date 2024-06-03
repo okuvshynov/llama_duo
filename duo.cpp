@@ -8,25 +8,10 @@
 #include <common.h>
 #include <llama.h>
 
-static void dbg_color(const std::string & s, const std::string & fg = "")
-{
-    static const std::string kReset = "\033[0m";
-    static const std::string kBold[] = { "", "\033[1m" };
-    static size_t index = 0;
-    std::cout << kBold[index] << fg << s << kReset << std::flush;
-    index = 1 - index;
-}
+#include "utils.h"
 
-template<typename iter_t>
-static std::string to_string(llama_context * ctx, iter_t from, iter_t to)
+namespace llama_duo
 {
-    std::string res = "";
-    for (auto it = from; it != to; ++it)
-    {
-        res += llama_token_to_piece(ctx, *it);
-    }
-    return res;
-}
 
 using llama_tokens = std::vector<llama_token>;
 
@@ -45,28 +30,6 @@ struct shared_context
     Turn         turn = NONE;
     std::condition_variable cv;
 };
-
-// this ignores all the other sampling criteria
-static llama_tokens greedy_tokens(llama_model * model, llama_context * ctx, int32_t from, int32_t to)
-{
-    auto n_vocab = llama_n_vocab(model);
-    std::vector<llama_token> res;
-
-    for (int idx = from; idx < to; idx++)
-    {
-        auto * logits  = llama_get_logits_ith(ctx, idx);
-        llama_token new_token_id = 0;
-        for (llama_token token_id = 1; token_id < n_vocab; token_id++)
-        {
-            if (logits[token_id] > logits[new_token_id])
-            {
-                new_token_id = token_id;
-            }
-        }
-        res.push_back(new_token_id);
-    }
-    return res;
-}
 
 template<typename iter_t>
 static int decode(llama_context * ctx, iter_t from, iter_t to, int offset, bool all_logits, llama_batch & batch)
@@ -158,7 +121,7 @@ static void target(
     const llama_tokens & input,
     size_t n_predict)
 {
-    dbg_color(to_string(ctx, input.begin(), input.end()));
+    dbg_not_matched(to_string(ctx, input.begin(), input.end()));
 
     llama_batch batch = llama_batch_init(512, 0, 1);
     decode(ctx, input.begin(), input.end(), 0, false, batch);
@@ -211,11 +174,11 @@ static void target(
                 n_match++;
             }
 
-            dbg_color(to_string(ctx, spec.begin() + next_tokens_pos, spec.begin() + next_tokens_pos + n_match), /* green */ "\033[32m");
+            dbg_accepted(to_string(ctx, spec.begin() + next_tokens_pos, spec.begin() + next_tokens_pos + n_match));
             if (n_match != next_tokens.size())
             {
-                dbg_color(to_string(ctx, spec.begin() + next_tokens_pos + n_match, spec.end()), /* red */ "\033[31m");
-                dbg_color(to_string(ctx, next_tokens.begin() + n_match, next_tokens.end()));
+                dbg_rejected(to_string(ctx, spec.begin() + next_tokens_pos + n_match, spec.end()));
+                dbg_not_matched(to_string(ctx, next_tokens.begin() + n_match, next_tokens.end()));
                 spec.erase(spec.begin() + next_tokens_pos, spec.end());
                 for (const auto tok: next_tokens)
                 {
@@ -238,7 +201,7 @@ static void target(
         logits_to   = input_seq.size();
     }
 
-    dbg_color("\n");
+    dbg_not_matched("\n");
     {
         std::lock_guard<std::mutex> _lock(sctx->mtx);
         sctx->done = true;
@@ -246,6 +209,8 @@ static void target(
 
     llama_batch_free(batch);
 }
+
+} // llama_duo
 
 int main(int argc, char ** argv) {
     gpt_params params;
@@ -268,7 +233,7 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     std::tie(model, ctx) = llama_init_from_gpt_params(params);
 
-    llama_tokens input = llama_tokenize(ctx, params.prompt, true);
+    llama_duo::llama_tokens input = llama_tokenize(ctx, params.prompt, true);
 
     // draft model and contexts.
     llama_model * draft_model = nullptr;
@@ -286,11 +251,11 @@ int main(int argc, char ** argv) {
     params.rpc_servers = "localhost:20002";
     std::tie(draft_model, draft_ctx) = llama_init_from_gpt_params(params);
     
-    shared_context sctx;
+    llama_duo::shared_context sctx;
     sctx.candidate = input;
-    sctx.turn = Turn::SPEC;
+    sctx.turn = llama_duo::Turn::SPEC;
 
-    std::thread spec_thread = std::thread(speculation, draft_model, draft_ctx, &sctx, input, params.n_draft);
+    std::thread spec_thread = std::thread(llama_duo::speculation, draft_model, draft_ctx, &sctx, input, params.n_draft);
     target(model, ctx, &sctx, input, params.n_predict);
     spec_thread.join();
     
