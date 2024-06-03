@@ -435,6 +435,7 @@ And as another datapoint - fp16 Llama3-70B on M2 Ultra would have difference cha
 [ ] Both async and sync speculation - if we don't have good candidate, generate N new tokens in place.
 [ ] Tree-based speculation
 [ ] beam search, not greedy sampling only.
+[ ] correct sampling
 [ ] make it work with some popular UI/API (what are those?)
 [ ] No hardcoded models
 [ ] Saving cache between sessions.
