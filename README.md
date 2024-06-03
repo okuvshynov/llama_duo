@@ -10,8 +10,18 @@ Example of configuration which doesn't get much value:
 Apple M1 (16GB RAM) + Apple M2 Ultra (192GB RAM). M2 Ultra is order of magnitude faster and second model is unable to keep up.
 
 The important potential appliaction for this approach would be to use speculation to speed up evaluation of huge models (e.g. hopefully upcoming llama3-405B), when the main model itself will be split between multiple devices and the 'spare compute' they would have will be used to speculate remotely.
-more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and https://github.com/okuvshynov/llama.cpp/tree/duo/examples/duo
 
+
+Update:
+more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and https://github.com/okuvshynov/llama.cpp/tree/duo/examples/duo -- 
+now duo.cpp is using llama.cpp RPC to run distributed speculation.
+
+```
+mkdir _build && cd _build
+cmake -DLLAMA_RPC=ON ..
+make -j 4
+./_build/duo -m ../llms/gguf/Meta-Llama-3-8B-Instruct-fp16.gguf -md ../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q2_K.gguf --rpc "169.254.77.16:10001,localhost:10001" -p "Please illustrate the difference between concurrency and parallelism in python." -n 256 -ngl 99 --draft 4
+```
 
 ## Dependencies
 
