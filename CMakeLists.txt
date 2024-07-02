@@ -23,7 +23,7 @@ FetchContent_MakeAvailable(httplib)
 FetchContent_Declare(
     llama.cpp
     GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
-    GIT_TAG        b3075
+    GIT_TAG        b3269
 )
 FetchContent_MakeAvailable(llama.cpp)
 
@@ -42,8 +42,8 @@ target_link_libraries(back PRIVATE httplib)
 target_link_libraries(duo  PRIVATE common) # from llama.cpp
 target_compile_definitions(duo PRIVATE LLAMA_RPC=ON)
 
-configure_file(${llama.cpp_SOURCE_DIR}/ggml-metal.metal ggml-metal.metal COPYONLY)
-configure_file(${llama.cpp_SOURCE_DIR}/ggml-common.h ggml-common.h COPYONLY)
+configure_file(${llama.cpp_SOURCE_DIR}/ggml/src/ggml-metal.metal ggml-metal.metal COPYONLY)
+configure_file(${llama.cpp_SOURCE_DIR}/ggml/src/ggml-common.h ggml-common.h COPYONLY)
 
 if(MSVC)
   target_compile_options(lead PRIVATE /W4 /WX)
