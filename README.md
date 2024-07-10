@@ -12,12 +12,14 @@ Example hardware/potential use-cases:
 
 1. [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
-## e2e example
+## Example on CPU+CUDA on same machine.
 
 Machine configuration:
 * Intel Xeon Platinum 8358, 30 Cores (probably HT threads, not physical cores)
 * ~205GB RAM
 * GPU 0: NVIDIA A10 with 24GB VRAM
+
+We'll setup and run duo and compare it to normal llama.cpp run with GPU/CPU offload. 
 
 First, getting the models in gguf format. We use `llama3-70B-Instruct.Q8` as main model and `llama3-8B-Instruct.Q8` as draft model:
 
@@ -71,8 +73,8 @@ which is located at ```llama_duo/prompt.txt```
 
 Run on CPU entirely:
 ```
-cd ~/llama.cpp
-time ./llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 0
+cd ~/llama.cpp/
+time ./build-rpc-cuda/bin/llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 0
 ...
 llama_print_timings:        load time =    3966.50 ms
 llama_print_timings:      sample time =      44.57 ms /   512 runs   (    0.09 ms per token, 11487.81 tokens per second)
@@ -88,10 +90,11 @@ sys	0m5.870s
 ```
 
 
-We can offload part of the model to GPU, with 22 being the largest number of layers I could fit
+We can offload part of the model to GPU, with 22 being the largest number of layers I could fit for this hardware/model/prompt combination
 
 ```
-time ./llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 22
+cd ~/llama.cpp/
+time ./build-rpc-cuda/bin/llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 22
 ...
 llama_print_timings:        load time =    5650.47 ms
 llama_print_timings:      sample time =      40.73 ms /   512 runs   (    0.08 ms per token, 12571.82 tokens per second)
@@ -173,6 +176,6 @@ sys	0m5.889s
 
 Some notes:
 * there's nothing smart done about scheduling GPU work when both speculation and part of main model are running there.
-* settings are very likely suboptimal - for example, it's possible we could use smaller quant of speculation model and offload more main model layers.
-* sampling is just greedy and needs to be done right
+* settings are very likely suboptimal - for example, it's possible we could use more aggresively quantized speculation model and keep more main model layers on GPU.
+* sampling is just greedy and needs to be done right.
 
