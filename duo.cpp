@@ -11,10 +11,77 @@
 #include <common.h>
 #include <llama.h>
 
-#include "utils.h"
+//#include "utils.h"
 
 namespace llama_duo
 {
+
+void dbg_color(const std::string & s, const std::string & fg)
+{
+    static const std::string kReset = "\033[0m";
+    static const std::string bold[] = { "", "\033[1m" };
+    static size_t index = 0;
+    std::cout << bold[index] << fg << s << kReset << std::flush;
+    index = 1 - index;
+}
+
+void dbg_accepted(const std::string & accepted)
+{
+    static const std::string kGreen = "\033[32m";
+    dbg_color(accepted, kGreen);
+}
+
+void dbg_not_matched(const std::string & accepted)
+{
+    dbg_color(accepted, "");
+}
+
+void dbg_rejected(const std::string & rejected)
+{
+    static const std::string kRed = "\033[31m";
+    dbg_color(rejected, kRed);
+}
+
+template<typename iter_t>
+std::string to_string(llama_context * ctx, iter_t from, iter_t to)
+{
+    std::string res = "";
+    for (auto it = from; it != to; ++it)
+    {
+        res += llama_token_to_piece(ctx, *it);
+    }
+    return res;
+}
+
+std::vector<llama_token> greedy_tokens(
+        llama_model * model,
+        llama_context * ctx,
+        int32_t from_idx,
+        int32_t to_idx)
+{
+    auto n_vocab = llama_n_vocab(model);
+    std::vector<llama_token> res;
+    if (n_vocab <= 0)
+    {
+        return res;
+    }
+
+    for (int idx = from_idx; idx < to_idx; idx++)
+    {
+        auto * logits  = llama_get_logits_ith(ctx, idx);
+        llama_token new_token_id = 0;
+        for (llama_token token_id = 1; token_id < n_vocab; token_id++)
+        {
+            if (logits[token_id] > logits[new_token_id])
+            {
+                new_token_id = token_id;
+            }
+        }
+
+        res.push_back(new_token_id);
+    }
+    return res;
+}
 
 using llama_tokens = std::vector<llama_token>;
 
@@ -182,7 +249,7 @@ static void target(
             dbg_accepted(to_string(ctx, spec.begin() + next_tokens_pos, spec.begin() + next_tokens_pos + n_match));
             if (n_match != next_tokens.size())
             {
-                dbg_rejected(to_string(ctx, spec.begin() + next_tokens_pos + n_match, spec.end()));
+                //dbg_rejected(to_string(ctx, spec.begin() + next_tokens_pos + n_match, spec.end()));
                 dbg_not_matched(to_string(ctx, next_tokens.begin() + n_match, next_tokens.end()));
                 spec.erase(spec.begin() + next_tokens_pos, spec.end());
                 for (const auto tok: next_tokens)
@@ -234,6 +301,10 @@ int main(int argc, char ** argv) {
     {
         params.seed = time(NULL);
     }
+    
+    // TODO: hacky: we use rpc_servers for draft model only
+    std::string draft_rpc = params.rpc_servers;
+    params.rpc_servers = "";
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -257,8 +328,7 @@ int main(int argc, char ** argv) {
     }
     params.n_threads_batch = params.n_threads_batch_draft;
 
-    // TODO: add option parsing
-    params.rpc_servers = "localhost:20002";
+    params.rpc_servers = draft_rpc;
     std::tie(draft_model, draft_ctx) = llama_init_from_gpt_params(params);
     
     llama_duo::shared_context sctx;
