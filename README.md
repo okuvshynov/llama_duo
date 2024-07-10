@@ -1,446 +1,178 @@
 # llama duo - asyncronous/distributed speculative decoding for llama3. 
 
-llama duo is an attempt to make simple linear speculative decoding work in parallel with the main model. It is mostly intended to work in situations when two devices are available (e.g. Mac Mini and laptop) and we attempt to use the second device to speed up the generation.
+llama duo is an attempt to make simple linear speculative decoding work in parallel with the main model. It is mostly intended to work in situations when two compute devices are available (e.g. Mac Mini and laptop or GPU and good CPU on the same box) and we share the compute to use the second device to speed up.
 Not every hardware/model combination would benefit from such setup. 
 
-Example of the configuration which gets good speedup:
-Apple M1 (16GB RAM) runs Llama3-8B-Instruct @ Q8 and Apple M2 (24GB RAM) runs Llama3-8B-Instruct @ Q4.
-
-Example of configuration which doesn't get much value:
-Apple M1 (16GB RAM) + Apple M2 Ultra (192GB RAM). M2 Ultra is order of magnitude faster and second model is unable to keep up.
-
-The important potential appliaction for this approach would be to use speculation to speed up evaluation of huge models (e.g. hopefully upcoming llama3-405B), when the main model itself will be split between multiple devices and the 'spare compute' they would have will be used to speculate remotely.
-
-
-Update:
-more plans on this https://github.com/okuvshynov/llama_duo/issues/1 and https://github.com/okuvshynov/llama.cpp/tree/duo/examples/duo -- 
-now duo.cpp is using llama.cpp RPC to run distributed speculation.
-
-```
-mkdir _build && cd _build
-cmake -DLLAMA_RPC=ON ..
-make -j 4
-./_build/duo -m ../llms/gguf/Meta-Llama-3-8B-Instruct-fp16.gguf -md ../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q2_K.gguf --rpc "169.254.77.16:10001,localhost:10001" -p "Please illustrate the difference between concurrency and parallelism in python." -n 256 -ngl 99 --draft 4
-```
+Example hardware/potential use-cases:
+* Instance with good CPU, large system RAM, and good GPU with small VRAM
+* Situations where main model doesn't fit into one device and is split - this was we can amortize the cost of running speculation on 'spare' compute.
+* Apple's M1/M2/M3 devices where we'll utilize both CPU and GPU for speculation.
 
 ## Dependencies
 
 1. [llama.cpp](https://github.com/ggerganov/llama.cpp)
-2. [nlohmann/json](https://github.com/nlohmann/json)
-3. [cpp-httplib](https://github.com/yhirose/cpp-httplib)
 
-dependencies are being pulled using cmake FetchContent, so there's no need to install these libraries manually.
+## e2e example
 
-For the CLI chat.py, needs python and requests module.
+Machine configuration:
+* Intel Xeon Platinum 8358, 30 Cores (probably HT threads, not physical cores)
+* ~205GB RAM
+* GPU 0: NVIDIA A10 with 24GB VRAM
 
-## Installation
+First, getting the models in gguf format. We use `llama3-70B-Instruct.Q8` as main model and `llama3-8B-Instruct.Q8` as draft model:
 
 ```
+pip install -U "huggingface_hub[cli]"
+mkdir ~/llms && cd ~/llms
+
+# download llama3-70b-q8
+huggingface-cli download QuantFactory/Meta-Llama-3-70B-Instruct-GGUF-v2 Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf --local-dir .
+huggingface-cli download QuantFactory/Meta-Llama-3-70B-Instruct-GGUF-v2 Meta-Llama-3-70B-Instruct-v2.Q8_0-00002-of-00003.gguf --local-dir .
+huggingface-cli download QuantFactory/Meta-Llama-3-70B-Instruct-GGUF-v2 Meta-Llama-3-70B-Instruct-v2.Q8_0-00003-of-00003.gguf --local-dir .
+
+# download llama3-8b-q8
+huggingface-cli download QuantFactory/Meta-Llama-3-8B-Instruct-GGUF-v2 Meta-Llama-3-8B-Instruct-v2.Q8_0.gguf --local-dir .
+```
+
+Get and build llama_duo (this repo):
+```
+cd ~
+git clone https://github.com/okuvshynov/llama_duo.git
+cd llama_duo/
 mkdir _build && cd _build
-cmake ..
-make -j 4
-pip install requests
+cmake -DLLAMA_RPC=ON -DGGML_CUDA=ON ..
+make -j 16
 ```
 
-After this step you should have two binaries built: ```lead``` and ```back```. 
-
-## Distributed example
-
-On M2 Macbook with 24 GB memory start ```lead``` service with full fp16 precision 8B model:
-
+Now get llama.cpp and build it with RPC and CUDA support:
 ```
-./lead -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct-fp16.gguf -ngl 99
-```
-
-On M1 Mini with 16GB memory start ```back``` service and specify the ```lead``` host:
-
-```
-./back -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct.Q3_K_M.gguf --host 169.254.226.241 -ngl 99
+cd ~
+git clone https://github.com/ggerganov/llama.cpp.git
+cd ~/llama.cpp
+mkdir build-rpc-cuda
+cd build-rpc-cuda
+cmake .. -DGGML_CUDA=ON -DGGML_RPC=ON
+make -j 16
 ```
 
-Both of these services will evaluate model on GPU (```-ngl``` flag). The model they run is essentially the same, except smaller and slower machine runs more aggressively quantized version.
+Now we can try using llama.cpp. Note that we cannot load entire 70B model to GPU vram, so the model must be shared between main memory and GPU.
 
-Now on the macbook start the chat and ask a question:
+We'll use following prompt:
 
-```
-python chat.py
-You: Illustrate the difference between concurrency and parallelism in python.
-```
-
-```
-...
-I: decoded  737 tokens in   81.129 seconds, speed:    9.084 t/s
-I: total generation time: 100.386
-```
-
-Running same model without speculation is much slower:
-
-```
-..
-I: decoded  737 tokens in  222.631 seconds, speed:    3.306 t/s
-I: total generation time: 224.635
-```
-
-## Inverted distributed example
-
-We use the same M2 Macbook and M1 Mini, but ```lead``` now runs on Mac Mini:
-
-```
-./lead -ngl 99 -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q8_0.gguf
-```
-
-chat and ```back``` run on the laptop:
-
-```
-./back -ngl 55 -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q4_0.gguf --host 169.254.90.21
-```
-
-```
-python chat.py http://169.254.90.21:5555
-You: Implement a simple lock-free container in c++
-```
-
-Even though M2 has better GPU and more unified RAM, such setup was useful as resources on the laptop are needed for other applications as well, like keeping a few Chrome tabs open.
-
-With async speculation:
-```
-I: encoded  104 tokens in    1.181 seconds, speed:   88.026 t/s
-...
-I: decoded  695 tokens in   52.814 seconds, speed:   13.159 t/s
-I: total generation time: 53.9993
-```
-
-Without async speculation:
-```
-I: encoded  104 tokens in    1.270 seconds, speed:   81.912 t/s
-...
-I: decoded  692 tokens in  103.642 seconds, speed:    6.677 t/s
-I: total generation time: 104.914
-```
-
-You can not a different number of tokens in async speculation - that happened because we evaluated sequence and got eot in the middle of it.
-
-## Local example
-
-Here we run it on single M2 Ultra, using GPU for main model and CPU for second model. 
-
-Start lead with Llama3-70B@Q8 model with all layers on GPU and default settings for interface/port 0.0.0.0:5555:
-
-```
-./lead -m ../../../llms/gguf/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf --n-gpu-layers 99
-```
-
-Start back with Llama3-8B@Q4 model on 16 CPU threads. It looks for lead service on localhost:5555 by default.
-
-```
-./back -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q4_0.gguf --n-gpu-layers 0 --threads 16
-```
-
-Start basic chat command-line interface (also defaults to localhost:5555):
-
-```
-python chat.py
-```
-
-In chat window ask the model something: 
-
-```
-You: Illustrate the difference between concurrency and parallelism in python.
-```
-
-What we should observe:
-
-1. ```lead``` service should start printing out the generated tokens, highlighing accepted tokens in green.
-2. ```back``` would print some debug info.
-3. After the generation is complete, the response would be returned to chat.
-
-
-```lead``` would print out some timing info:
-
-```
-I: encoded  105 tokens in    3.108 seconds, speed:   33.786 t/s
-...
-I: decoded  784 tokens in   75.159 seconds, speed:   10.431 t/s
-I: total generation time: 78.2696
-```
-
-## Simulating failures
-
-Note that ```back``` service is optional - we can turn it off, run the main model as before:
-
-```
-./lead -m ../../../llms/gguf/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf --n-gpu-layers 99
-```
-
-```
-python chat.py
-```
-
-In chat window ask the same question: 
-
-```
-You: Illustrate the difference between concurrency and parallelism in python.
-```
-
-And observe the same output.
-
-```
-I: encoded  105 tokens in    2.699 seconds, speed:   38.908 t/s
-...
-I: decoded  784 tokens in   92.639 seconds, speed:    8.463 t/s
-I: total generation time: 95.3407
-```
-
-As we can see, it is slower.
-
-
-We can also start/stop/simulate non-availability/failure for ```back``` service. As in previous example, start main model and chat:
-
-```
-./lead -m ../../../llms/gguf/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf --n-gpu-layers 99
-```
-
-```
-python chat.py
-```
-
-In chat window ask the model the same question: 
-
-```
-You: Illustrate the difference between concurrency and parallelism in python.
-```
-
-At some moment during generation start the ```back``` service:
-
-```
-./back -m ../../../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q4_0.gguf --n-gpu-layers 0 --threads 16
-```
-
-```back``` service would catch up with ```lead``` by processing input prompt + the tokens generated to this point and start speculating.
-The performance would be somewhere in between the two runs above
-
-```
-I: encoded  105 tokens in    2.765 seconds, speed:   37.969 t/s
-...
-I: decoded  784 tokens in   82.254 seconds, speed:    9.568 t/s
-I: total generation time: 85.0213
-```
-
-We can also kill the back service sometime in the middle of query processing, start it again, etc.
-
-## How it works
-
-It is simple linear speculation, except it is generated in parallel with main model and reconciled after each lead token generation.
-
-We can think of three separate sequences:
-1. local sequence on ```lead``` -- this is ground truth, which will be equivalent to main model producing tokens one by one. Let's call this sequence ```L```.
-2. local sequence on ```back``` -- this is the speculated sequence which we work on in parallel. Let's call this sequence ```B```.
-3. shared speculation sequence on ```lead``` -- it serves as a communication channel between ```lead``` and ```back``` models. Let's call this sequence ```S```. This sequence might contain tokens of two types: ```approved```, which were confirmed by main model and are also part of ```L``` and ```not_rejected``` - produced by speculation model, but we don't know yet if it will be approved or not.
-
-Let's look at the following example:
-
-```lead``` got a request from chat.py with prompt ```[The, quick, brown]```. Sequences ```L``` and ```S``` are initialized with it.
-
-```lead``` and ```back``` start working on it in parallel. All operations involving read/write from/to ```S``` are guarded with mutex so that lead and back would not modify it simultaneously. Let's consider the following event sequence.
-
-0. Initialization
-<pre>
-L = [the, quick, brown]
-B = []
-S = [<b>the, quick, brown</b>]
-</pre>
-
-1. ```back``` calls ```lead``` periodically to check if there's some work. If yes, set ```B := S```
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown]
-S = [<b>the, quick, brown</b>]
-</pre>
-
-2. ```back``` produces 'fox'.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox]
-S = [<b>the, quick, brown</b>]
-</pre>
-
-3. ```back``` calls ```lead``` and compares ```B``` with ```S```. 'fox' and appended to the ```S``` in 'not_rejected' state.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox]
-S = [<b>the, quick, brown</b>, fox]  
-</pre>
-
-4. ```back``` produces 'jumps'.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox, jumps]
-S = [<b>the, quick, brown</b>, fox]  
-</pre>
-
-
-5. ```back``` calls ```lead``` and compares ```B``` with ```S```. 'jumps' is appended to ```S``` in 'not_rejected' state.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox, jumps]
-S = [<b>the, quick, brown</b>, fox, jumps]
-</pre>
-
-
-6. ```back``` produces 'into'.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox, jumps, into]
-S = [<b>the, quick, brown</b>, fox, jumps]
-</pre>
-
-
-7. ```back``` calls ```lead``` and compares ```B``` with ```S```. 'into' is appended to ```S``` in 'not_rejected' state.
-<pre>
-L = [the, quick, brown]
-B = [the, quick, brown, fox, jumps, into]
-S = [<b>the, quick, brown</b>, fox, jumps, into]
-</pre>
-
-
-8. ```lead``` produces 'fox'. 'fox' is appended to ```L```.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into]
-S = [<b>the, quick, brown</b>, fox, jumps, into]
-</pre>
-
-
-9. ```lead``` compares ```L``` with ```S```. As 'fox' matches, it is marked is approved, 'jumps into' stays not_rejected, main model starts working on input of 3 tokens 'fox jumps into'.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into]
-S = [<b>the, quick, brown, fox</b>, jumps, into]
-</pre>
-
-
-10. ```back``` produces 'the'.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into, the]
-S = [<b>the, quick, brown, fox</b>, jumps, into]
-</pre>
-
-
-11. ```back``` calls ```lead``` and compares ```B``` with ```S```. 'the' is appended to ```S``` in 'not_rejected' state.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into, the]
-S = [<b>the, quick, brown, fox</b>, jumps, into, the]
-</pre>
-
-
-12. ```back``` produces 'big'.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into, the, big]
-S = [<b>the, quick, brown, fox</b>, jumps, into, the]
-</pre>
-
-
-13. ```back``` calls ```lead``` and compares ```B``` with ```S```. 'big' is appended to ```S``` in 'not_rejected' state.
-<pre>
-L = [the, quick, brown, fox]
-B = [the, quick, brown, fox, jumps, into, the, big]
-S = [<b>the, quick, brown, fox</b>, jumps, into, the, big]
-</pre>
-
-
-14. ```lead``` produces 'jumps over the'. First, we need to compare the output with input (in this case, 'fox jumps into'). As 'jumps' matches, but 'over' != 'into', we accept 'jumps over' and append it to ```L```. We cannot accept 'the', because it was produced as an continuation to the sequence 'the quick brown fox jumps into', and we now know that 'into' was wrong.
-<pre>
-L = [the, quick, brown, fox, jumps, over]
-B = [the, quick, brown, fox, jumps, into, the, big]
-S = [<b>the, quick, brown, fox</b>, jumps, into, the, big]
-</pre>
-
-
-15. ```lead``` compares L with S. We reject 'into the big', remove them from the sequence ```S``` and assign ```S := L```. ```lead``` works on a single input 'over'.
-<pre>
-L = [the, quick, brown, fox, jumps, over]
-B = [the, quick, brown, fox, jumps, into, the, big]
-S = [<b>the, quick, brown, fox, jumps, over</b>]
-</pre>
-
-
-16. ```back``` produces 'puddle'.
-<pre>
-L = [the, quick, brown, fox, jumps, over]
-B = [the, quick, brown, fox, jumps, into, the, big, puddle]
-S = [<b>the, quick, brown, fox, jumps, over</b>]
-</pre>
-
-
-17. ```back``` calls lead and compares ```B``` with ```S```. We see a mismatch, append nothing to ```S```, and assign ```B := S```.
-<pre>
-L = [the, quick, brown, fox, jumps, over]
-B = [the, quick, brown, fox, jumps, over]
-S = [<b>the, quick, brown, fox, jumps, over</b>]
-</pre>
-
-The actual implementation is a little more complicated because:
-1. communication between ```lead``` and ```back``` involves passing delta rather than entire sequence - otherwise we'd end up with large messages for long contexts.
-2. ```back``` needs to support starting in the middle of processing of main model.
-
-It's probably best to check the code to see the details.
-
-## Comparison with synchronous speculative decoding 
-
-Test set up:
-1. Same hardware - M2 Ultra
-2. Software - [speculative](https://github.com/ggerganov/llama.cpp/tree/master/examples/speculative) from llama.cpp with same models
-3. Same formatted prompt:
-
-prompt:
 ```
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
-You are a helpful, respectful and honest assistant.<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
+You are a helpful, respectful and honest assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-Illustrate the difference between concurrency and parallelism in python.<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Please illustrate the difference between concurrency and parallelism in python<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 ```
 
-4. Command:
+which is located at ```llama_duo/prompt.txt```
+
+Run on CPU entirely:
 ```
-./speculative -m ../llms/gguf/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -md ../llms/gguf/Meta-Llama-3-8B-Instruct-v2.Q4_0.gguf -f /tmp/p.txt -e -ngl 99 -t 4 -n 1024 -c 4096 -s 8 --top_k 1 -ngld 99
-```
+cd ~/llama.cpp
+time ./llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 0
+...
+llama_print_timings:        load time =    3966.50 ms
+llama_print_timings:      sample time =      44.57 ms /   512 runs   (    0.09 ms per token, 11487.81 tokens per second)
+llama_print_timings: prompt eval time =    6596.12 ms /    36 tokens (  183.23 ms per token,     5.46 tokens per second)
+llama_print_timings:        eval time =  250417.02 ms /   511 runs   (  490.05 ms per token,     2.04 tokens per second)
+llama_print_timings:       total time =  257221.29 ms /   547 tokens
+Log end
 
-Results in decoding speed of 8.496 t/s, which is somewhere in between async speculation and no speculation.
-
-## limitations
-* llama3 instruct hardcoded prompt format.
-* only tested on Apple devices (M1, M2, M2 Ultra).
-* greedy sampling
-
-## Effectiveness of speculative evaluation
-
-Regardless of sync/async, speculative evaluation has different effectiveness for difference hardware/model/quantization level combinations.
-
-See some discussion here: https://github.com/ggerganov/llama.cpp/discussions/6777
-
-And as another datapoint - fp16 Llama3-70B on M2 Ultra would have difference characteristics. 
-
-<img align="middle" width="782" alt="Screenshot 2024-05-16 at 11 07 36 AM" src="https://github.com/okuvshynov/experiments/assets/661042/7cb29ebb-9aed-4a75-98fb-de2792804d6f">
-
-
-
-## TODO
+real	4m22.915s
+user	125m48.069s
+sys	0m5.870s
 
 ```
-[ ] Both async and sync speculation - if we don't have good candidate, generate N new tokens in place.
-[ ] Tree-based speculation
-[ ] beam search, not greedy sampling only.
-[ ] correct sampling
-[ ] make it work with some popular UI/API (what are those?)
-[ ] No hardcoded models
-[ ] Saving cache between sessions.
-[ ] Hardware to try it on:
-  [ ] something small -  Raspberry Pi + Phi model
-  [ ] large CPU-only servers with a lot of RAM.
-  [ ] iPhone/iPad for chat + speculation model?
+
+
+We can offload part of the model to GPU, with 22 being the largest number of layers I could fit
+
 ```
+time ./llama-cli -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -f ../llama_duo/test_prompt.txt -n 512 -ngl 22
+...
+llama_print_timings:        load time =    5650.47 ms
+llama_print_timings:      sample time =      40.73 ms /   512 runs   (    0.08 ms per token, 12571.82 tokens per second)
+llama_print_timings: prompt eval time =    4932.85 ms /    36 tokens (  137.02 ms per token,     7.30 tokens per second)
+llama_print_timings:        eval time =  202207.16 ms /   511 runs   (  395.71 ms per token,     2.53 tokens per second)
+llama_print_timings:       total time =  207313.90 ms /   547 tokens
+Log end
+
+real	3m34.382s
+user	92m7.193s
+sys	0m5.575s
+```
+
+We get some improvement, from 2.05 -> 2.53 tps on generation and ~50 seconds absolute time.
+
+We can also monitor resource usage with cubestat: `cubestat -i 100`
+
+<img width="834" alt="Screenshot 2024-07-10 at 12 21 55 PM" src="https://github.com/okuvshynov/llama_duo/assets/661042/48cdc3ab-cdae-4756-9b60-094c13dafbb6">
+
+and see that GPU is heavily underutilizing the compute as it has to wait for CPU to complete its part.
+
+Now let's do speculation. We'll do speculation on GPU and main model on CPU, which sounds counterintuitive, but:
+* this way we get to quickly compute speculation model
+* speculation model will fit entirely into GPU's VRAM
+* CPU execution ports while not as wide as GPU, still benefit from batches of size > 1, implementation would use SIMD (AVX, etc.)
+
+From llama.cpp build, start rpc server in a separate terminal window:
+```
+cd ~/llama.cpp/build-rpc-cuda
+bin/rpc-server -p 20002
+```
+
+Now we can start duo with the same prompt. Main model runs on CPU and speculation - on GPU, see ngl anad ngld options. Note that we configure rpc server to be used for draft model only, not for main model [here](https://github.com/okuvshynov/llama_duo/blob/main/duo.cpp#L305-L307)
+```
+cd ~/llama_duo/
+time ./_build/duo -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -md ../llms/Meta-Llama-3-8B-Instruct-v2.Q8_0.gguf -f ./test_prompt.txt -n 512 --draft 4 -ngl 0 -ngld 99 --rpc localhost:20002
+...
+
+tokens: 512 tps: 3.78504
+
+real	2m33.495s
+user	67m34.029s
+sys	0m8.442s
+```
+
+We got another minute off!
+
+Now, we can check resource utilization as well.
+
+<img width="840" alt="Screenshot 2024-07-10 at 12 30 46 PM" src="https://github.com/okuvshynov/llama_duo/assets/661042/ef80c83b-274a-4812-923a-5f5fec68cf45">
+
+As we can see, gpu is still utilized not too well, and on top of that we have spare VRAM. So while we have speculation running on GPU we can also offload part of the main model to GPU (11-12 layers is likely the limit):
+
+```
+cd ~/llama_duo/
+time ./_build/duo -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -md ../llms/Meta-Llama-3-8B-Instruct-v2.Q8_0.gguf -f ./test_prompt.txt -n 512 --draft 4 -ngl 11 -ngld 99 --rpc localhost:20002
+...
+tokens: 512 tps: 4.47763
+
+real	2m13.046s
+user	51m40.820s
+sys	0m8.915s
+```
+
+And 20 more seconds of overall time.
+
+In this particular example both speculation and main model are running on the same host, we don't actually have to use rpc at all - we can just start duo like this and get similar results: 
+
+```
+cd ~/llama_duo/
+time ./_build/duo -m ../llms/Meta-Llama-3-70B-Instruct-v2.Q8_0-00001-of-00003.gguf -md ../llms/Meta-Llama-3-8B-Instruct-v2.Q8_0.gguf -f ./test_prompt.txt -n 512 --draft 4 -ngl 11 -ngld 99
+...
+tokens: 514 tps: 4.43318
+
+real	2m10.058s
+user	52m53.796s
+sys	0m5.889s
+```
+
+Some notes:
+* there's nothing smart done about scheduling GPU work when both speculation and part of main model are running there.
+* settings are very likely suboptimal - for example, it's possible we could use smaller quant of speculation model and offload more main model layers.
+* sampling is just greedy and needs to be done right
+
