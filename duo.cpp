@@ -1,7 +1,10 @@
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -134,6 +137,8 @@ static void target(
     llama_tokens input_seq, next_tokens;
     input_seq.push_back(input.back());
 
+    auto start_us = ggml_time_us();
+
     while (n_accepted < n_predict + input.size())
     {
         next_tokens = greedy_tokens(model, ctx, logits_from, logits_to);
@@ -201,11 +206,16 @@ static void target(
         logits_to   = input_seq.size();
     }
 
+    double dur_s  = 1.0e-6 * (ggml_time_us() - start_us);
+    size_t tokens = n_accepted - input.size(); 
+    
     dbg_not_matched("\n");
+    std::cerr << "tokens: " << tokens << " tps: " << tokens / dur_s << std::endl;
     {
         std::lock_guard<std::mutex> _lock(sctx->mtx);
         sctx->done = true;
     }
+
 
     llama_batch_free(batch);
 }
