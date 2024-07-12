@@ -1,80 +1,62 @@
 #include <nlohmann/json.hpp>
 #include <httplib.h>
 
-void update_prompt(std::string s)
-{
-}
+// llama.cpp
+#include <common.h>
+#include <llama.h>
 
-void generate()
-{
-}
+/*
 
-struct value_parser
+Test example:
+curl -s -S -X POST "http://127.0.0.1:5555/query" -H 'Content-Type: application/json' -d '{"text": "t", "offset": 10, "complete": true}'
+*/
+
+using llama_tokens = std::vector<llama_token>;
+
+// single thread/single query at first
+class llama 
 {
-    template<typename value_t>
-    static void parse(const char * value, value_t & field)
+  public:
+    llama(gpt_params params)
     {
-        std::istringstream iss(value);
-        iss >> field;
-    }
-};
+        llama_backend_init();
+        llama_numa_init(params.numa);
+        std::tie(model_, ctx_) = llama_init_from_gpt_params(params);
 
-template<>
-void value_parser::parse<std::string>(const char * value, std::string & field)
-{
-    field = value;
-}
-
-template<typename config_t>
-struct parser
-{
-    int parse_options(int argc, char ** argv, config_t & conf)
-    {
-        for (int i = 1; i < argc; i++)
-        {
-            std::string key(argv[i]);
-            auto it = setters_.find(key);
-            if (it != setters_.end())
-            {
-                if (++i < argc)
-                {
-                    it->second(argv[i], conf);
-                }
-                else
-                {
-                    fprintf(stderr, "No argument value provided for %s\n", argv[i - 1]);
-                    return 1;
-                }
-            }
-            else
-            {
-                fprintf(stderr, "Unknown argument %s\n", argv[i]);
-                return 1;
-            }
-        }
-        return 0;
     }
 
-    template<typename T>
-    void add_option(const std::string& key, T config_t::* field)
+    ~llama()
     {
-        setters_[key] = [field](const char * value, config_t & conf)
-        {
-            value_parser::parse(value, conf.*field);
-        };
+        llama_free(ctx_);
+        llama_free_model(model_);
+        llama_backend_free();
+
     }
 
-    template<typename T>
-    void add_option(const std::initializer_list<std::string>& keys, T config_t::* field)
+    void update_prompt(std::string s)
     {
-        for (const auto& key : keys)
-        {
-            add_option(key, field);
-        }
+        llama_tokens input = llama_tokenize(ctx_, s, true);
+        // now we need to compare it to input_ we work on and reset cache if needed
+
+    }
+
+
+
+    bool next(std::string * s)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        static std::string val = "";
+        val += "A";
+        nlohmann::json res_j;
+        res_j["text"] = val + " ";
+        *s = res_j.dump() + "\n"; 
+        return val.size() < 5;
     }
 
   private:
-    std::map<std::string, std::function<void(const char*, config_t&)>> setters_;
+    llama_model * model_;
+    llama_context * ctx_;
+    llama_tokens input_;
 };
 
 class log
@@ -158,39 +140,17 @@ class log
     }
 };
 
-struct config
-{
-    std::string addr;          // to listen on. "0.0.0.0" is default. 
-    int32_t     port;          // 5555 is default.
-};
-
-config gen_config(int argc, char ** argv)
-{
-    config res = 
-    {
-        /* addr = */ "0.0.0.0",
-        /* port = */ 5555
-    };
-    parser<config> p;
-    // server options
-    p.add_option({"--addr"},       &config::addr);
-    p.add_option({"--port", "-p"}, &config::port);
-    if (0 != p.parse_options(argc, argv, res))
-    {
-        exit(-1);
-    }
-
-    return res;
-}
-
-void serve(const config & conf)
+void serve(std::shared_ptr<llama> llm)
 {
     using nlohmann::json;
+
     httplib::Server http_server;
+    std::string addr = "0.0.0.0";
+    int port = 5555;
 
     std::string curr = "";
 
-    http_server.Post("/query", [&curr](const httplib::Request & req, httplib::Response & res)
+    http_server.Post("/query", [&curr, &llm](const httplib::Request & req, httplib::Response & res)
     {
         try
         {
@@ -201,15 +161,10 @@ void serve(const config & conf)
             std::string text = req_j["text"];
             bool complete = req_j["complete"];
 
-            if (offset + text.size() > curr.size())
-            {
-                curr.resize(offset + text.size(), ' ');
-            }
-
-            // Insert or override the text at the specified offset
+            curr.resize(offset + text.size(), ' ');
             curr.replace(offset, text.size(), text);
 
-            update_prompt(curr);
+            llm->update_prompt(curr);
             if (!complete)
             {
                 res_j["text"] = curr;
@@ -217,26 +172,20 @@ void serve(const config & conf)
             }
             else
             {
-                generate();
                 res.set_chunked_content_provider(
                     "application/json",
-                    [](size_t offset, httplib::DataSink& sink) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-                        std::vector<std::string> chunks = {
-                            "{\"part\": 1, \"data\": \"Chunk 1\"}",
-                            "{\"part\": 2, \"data\": \"Chunk 2\"}",
-                            "{\"part\": 3, \"data\": \"Chunk 3\"}",
-                            "{\"part\": 4, \"data\": \"Chunk 4\"}"
-                        };
-
-                        if (offset < chunks.size()) {
-                            sink.write(chunks[offset].data(), chunks[offset].size());
-                            return true; // There's more data to send
-                        } else {
-                            sink.done();
-                            return false; // No more data
+                    [&llm](size_t offset, httplib::DataSink& sink) {
+                        std::string next;
+                        if (llm->next(&next))
+                        {
+                            std::cout << "writing " << next << std::endl;
+                            sink.write(next.data(), next.size());
                         }
+                        else
+                        {
+                            sink.done();
+                        }
+                        return true;
                     }
                 );
             }
@@ -247,15 +196,22 @@ void serve(const config & conf)
         }
     });
 
-    log::info("starting server on %s:%d\n", conf.addr.c_str(), conf.port);
-    http_server.listen(conf.addr, conf.port);
+    log::info("starting server on %s:%d\n", addr.c_str(), port);
+    http_server.listen(addr, port);
 }
 
 int main(int argc, char ** argv)
 {
-    auto conf = gen_config(argc, argv);
+    gpt_params params;
 
-    serve(conf);
+    if (gpt_params_parse(argc, argv, params) == false)
+    {
+        return 1;
+    }
+
+    auto llm = std::make_shared<llama>(params);
+
+    serve(llm);
 
 
     return 0;

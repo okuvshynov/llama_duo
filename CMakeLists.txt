@@ -27,14 +27,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(httplib)
 
-add_executable(duo  duo.cpp)
-add_executable(serv serv.cpp)
 
+add_executable(duo  duo.cpp)
 target_link_libraries(duo  PRIVATE common) # from llama.cpp
 target_compile_definitions(duo PRIVATE LLAMA_RPC=ON)
 
+add_executable(serv serv.cpp)
 target_link_libraries(serv PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(serv PRIVATE httplib)
+target_link_libraries(serv  PRIVATE common) # from llama.cpp
+target_compile_definitions(serv PRIVATE LLAMA_RPC=ON)
 
 if(MSVC)
   target_compile_options(duo  PRIVATE /W4 /WX)
