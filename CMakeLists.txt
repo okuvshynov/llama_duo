@@ -14,17 +14,33 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(llama.cpp)
 
+FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+FetchContent_MakeAvailable(json)
+
+FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG        v0.15.3
+)
+FetchContent_MakeAvailable(httplib)
+
 add_executable(duo  duo.cpp)
+add_executable(serv serv.cpp)
 
 target_link_libraries(duo  PRIVATE common) # from llama.cpp
 target_compile_definitions(duo PRIVATE LLAMA_RPC=ON)
 
-#configure_file(${llama.cpp_SOURCE_DIR}/ggml/src/ggml-metal.metal ggml-metal.metal COPYONLY)
-#configure_file(${llama.cpp_SOURCE_DIR}/ggml/src/ggml-common.h ggml-common.h COPYONLY)
+target_link_libraries(serv PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(serv PRIVATE httplib)
 
 if(MSVC)
   target_compile_options(duo  PRIVATE /W4 /WX)
+  target_compile_options(serv PRIVATE /W4 /WX)
 else()
   target_compile_options(duo  PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(serv PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
