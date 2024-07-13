@@ -333,22 +333,27 @@ void serve(std::shared_ptr<llama> llm)
                     "application/json",
                     [&llm](size_t /* offset */, httplib::DataSink& sink) {
                         std::string next;
+                        json res_j;
+                        res_j["choices"] = json::array();
                         while (true)
                         {
                             bool do_next = llm->next(&next);
                             if (!do_next)
                             {
                                 sink.done();
+                                // TODO: mark everything as done, reset generation.
                                 break;
                             }
                             if (next.size() == 0)
                             {
                                 // nothing generated yet, wait
-                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                                 continue;
                             }
 
-                            sink.write(next.data(), next.size());
+                            res_j["choices"][0]["delta"]["content"] = next;
+                            std::string res_s = res_j.dump();
+                            sink.write(res_s.data(), res_s.size());
                             break;
                         }
                         return true;
