@@ -14,10 +14,27 @@
 #include <llama.h>
 
 /*
-
-Test example:
-curl -s -S -X POST "http://127.0.0.1:5555/query" -H 'Content-Type: application/json' -d '{"text": "t", "offset": 10, "complete": true}'
-*/
+ * Need to support API similar to that of normal llama.cpp server
+ *
+ * request = {
+ *    "max_tokens": 1024,
+ *    "messages" : [
+ *      {"role": "user", "content": "How are you?"},
+ *      {"role": "assistant", "content": ",,,,"},
+ *    ],
+ *    "is_draft" : True ## this is streaming-specific
+ * }
+ *
+ * we'll need to
+ * * format it with llama3 template.
+ * * handle is_draft correctly
+ *
+ * response = {
+ *    "choices" : [{"delta": {"content": "blabla"}}]
+ * }
+ *
+ * how to handle multiple queries/sequences? seems like we need to use sequence_ids?
+ */
 
 using llama_tokens = std::vector<llama_token>;
 
@@ -102,6 +119,25 @@ class log
     }
 };
 
+std::string llama3_instruct_fmt_msg(const nlohmann::json & j)
+{
+    std::ostringstream oss;
+    oss << "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n";
+    oss << j.value("system", "") << "<|eot_id|>\n";
+
+    for (const auto& msg: j["messages"])
+    {
+        oss 
+            << "<|start_header_id|>"
+            << msg["role"].get<std::string>()
+            << "<|end_header_id|>\n\n"
+            << msg["content"].get<std::string>() << "<|eot_id|>";
+    }
+
+    oss << "<|start_header_id|>assistant<|end_header_id|>";
+    return oss.str();
+}
+
 // single thread/single query at first
 class llama 
 {
@@ -131,10 +167,10 @@ class llama
 
     void update_prompt(std::string s, bool start_sampling)
     {
-        llama_tokens input = llama_tokenize(ctx_, s, true);
+        log::info("updating prompt, new s=%zu", s.size());
         {
-            log::info("updating prompt");
             std::lock_guard<std::mutex> _lock(mutex_);
+            llama_tokens input = llama_tokenize(ctx_, s, true);
             input_ = input;
             do_sampling_ = start_sampling;
         }
@@ -151,10 +187,13 @@ class llama
         size_t n_done = 0;
         while (true)
         {
+            //log::info("iter");
             {
                 std::lock_guard<std::mutex> _lock(mutex_);
+                //log::info("checking input");
                 if (input != input_)
                 {
+                    log::info("updating input");
                     size_t n_matched = std::min(input_.size(), input.size());
                     for (size_t i = 0; i < n_matched; i++)
                     {
@@ -172,9 +211,14 @@ class llama
                         llama_kv_cache_seq_rm(ctx_, 0, n_done, -1);
                     }
                 }
+                else
+                {
+                    //log::info("not updating input");
+                }
             }
             if (n_done >= input.size())
             {
+                // log::info("done current input");
                 bool do_sampling = false;
                 {
                     std::lock_guard<std::mutex> _lock(mutex_);
@@ -182,6 +226,7 @@ class llama
                 }
                 if (!do_sampling)
                 {
+                    //log::info("waiting for next chunk");
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
@@ -217,7 +262,9 @@ class llama
             else
             {
                 // processing input
+                //log::info("processing input");
                 size_t i;
+                llama_batch_clear(batch);
                 for (i = 0; i < batch_size && i + n_done < input.size(); i++)
                 {
                     llama_batch_add(batch, input[i + n_done], i + n_done, {0}, false);
@@ -238,12 +285,11 @@ class llama
 
     bool next(std::string * s)
     {
-        {
-            std::lock_guard<std::mutex> _lock(mutex_);
-            *s = output_.substr(output_returned_);
-            output_returned_ = output_.size();
-            return !gen_done_;
-        }
+        //log::info("next()");
+        std::lock_guard<std::mutex> _lock(mutex_);
+        *s = output_.substr(output_returned_);
+        output_returned_ = output_.size();
+        return !gen_done_;
     }
 
   private:
@@ -259,42 +305,33 @@ class llama
     size_t output_returned_;
 };
 
-
 void serve(std::shared_ptr<llama> llm)
 {
     using nlohmann::json;
 
     httplib::Server http_server;
+    // TODO: configure this
     std::string addr = "0.0.0.0";
     int port = 5555;
 
-    std::string curr = "";
-
-    http_server.Post("/query", [&curr, &llm](const httplib::Request & req, httplib::Response & res)
+    http_server.Post("/query", [&llm](const httplib::Request & req, httplib::Response & res)
     {
         try
         {
             auto req_j = json::parse(req.body);
-            json res_j;
-
-            size_t offset = req_j["offset"];
-            std::string text = req_j["text"];
+            std::string text = llama3_instruct_fmt_msg(req_j);
             bool complete = req_j["complete"];
 
-            curr.resize(offset + text.size(), ' ');
-            curr.replace(offset, text.size(), text);
-
-            llm->update_prompt(curr, complete);
+            llm->update_prompt(text, complete);
             if (!complete)
             {
-                res_j["text"] = curr;
-                res.set_content(res_j.dump(), "application/json");
+                res.set_content("revcd\n", "application/json");
             }
             else
             {
                 res.set_chunked_content_provider(
                     "application/json",
-                    [&llm](size_t offset, httplib::DataSink& sink) {
+                    [&llm](size_t /* offset */, httplib::DataSink& sink) {
                         std::string next;
                         while (true)
                         {
@@ -341,7 +378,6 @@ int main(int argc, char ** argv)
     auto llm = std::make_shared<llama>(params);
 
     serve(llm);
-
 
     return 0;
 }
