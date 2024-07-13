@@ -13,29 +13,6 @@
 #include <common.h>
 #include <llama.h>
 
-/*
- * Need to support API similar to that of normal llama.cpp server
- *
- * request = {
- *    "max_tokens": 1024,
- *    "messages" : [
- *      {"role": "user", "content": "How are you?"},
- *      {"role": "assistant", "content": ",,,,"},
- *    ],
- *    "is_draft" : True ## this is streaming-specific
- * }
- *
- * we'll need to
- * * format it with llama3 template.
- * * handle is_draft correctly
- *
- * response = {
- *    "choices" : [{"delta": {"content": "blabla"}}]
- * }
- *
- * how to handle multiple queries/sequences? seems like we need to use sequence_ids?
- */
-
 using llama_tokens = std::vector<llama_token>;
 
 class log
@@ -138,7 +115,6 @@ std::string llama3_instruct_fmt_msg(const nlohmann::json & j)
     return oss.str();
 }
 
-// single thread/single query at first
 class llama 
 {
   public:
