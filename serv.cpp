@@ -43,6 +43,7 @@ struct session_context
     bool input_done  = false;
     bool output_done = false;
 
+  private:
     // what do we do if we are generating output and got input update?
     friend class locked_session;
     std::mutex mutex;
@@ -51,13 +52,22 @@ struct session_context
 class locked_session
 {
   public:
-    locked_session(session_context& session_ctx): session_ctx_(session_ctx), lock_(session_ctx.mutex) {}
+    locked_session(session_context& session_ctx): session_ctx_(&session_ctx), lock_(session_ctx.mutex) {}
+    
+    locked_session(const locked_session &) = delete;
+    locked_session& operator=(const locked_session&) = delete;
+
+    locked_session(locked_session && other) noexcept
+        : session_ctx_(other.session_ctx_), lock_(std::move(other.lock_)) {
+        other.session_ctx_ = nullptr;
+    }
+
     session_context* operator->()
     {
-        return &session_ctx_;
+        return session_ctx_;
     }
   private:
-    session_context & session_ctx_;
+    session_context * session_ctx_;
     std::unique_lock<std::mutex> lock_;
 };
 
