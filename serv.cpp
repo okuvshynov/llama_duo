@@ -21,11 +21,18 @@ using llama_tokens = std::vector<llama_token>;
 // queries and conversations. Each conversation is a session.
 struct session_context
 {
-    std::mutex mutex;
     // the input passed. Should include the history,
     // as it is not guaranteed that we'll have cache.
-    // as we produce new tokens we append it here
+    // as we produce new tokens we append it here. This can be updated
+    // from both processing and API calls.
+    std::string  input_str;
+    bool         input_updated = false;
     llama_tokens tokens; 
+    
+    // input we worked on. 
+    llama_tokens input;
+    // how many of the input above was processed
+    size_t n_done;
 
     // output for the current message.
     // TODO: do we need to support some offset-based indexing for retries?
@@ -37,7 +44,29 @@ struct session_context
     bool output_done = false;
 
     // what do we do if we are generating output and got input update?
+    friend class locked_session;
+    std::mutex mutex;
 };
+
+class locked_session
+{
+  public:
+    locked_session(session_context& session_ctx): session_ctx_(session_ctx), lock_(session_ctx.mutex) {}
+    session_context* operator->()
+    {
+        return &session_ctx_;
+    }
+  private:
+    session_context & session_ctx_;
+    std::unique_lock<std::mutex> lock_;
+};
+
+// just one session for now. This should become a manager with map
+locked_session get_locked_session(uint64_t /* id */)
+{
+    static session_context session_ctx;
+    return locked_session(session_ctx);
+}
 
 // llama itself should be generic enough to support duo/speculation/rpc-based remote runs
 // it will work with one query at a time, and server would dispatch based on state
@@ -64,14 +93,13 @@ class llama
         llama_backend_free();
     }
 
-    void update_prompt(std::string s, bool input_done)
+    void update_prompt(uint64_t session_id, std::string s, bool input_done)
     {
-        log::info("updating prompt, new s=%zu", s.size());
-        {
-            std::lock_guard<std::mutex> _lock(session_ctx_.mutex);
-            session_ctx_.tokens = llama_tokenize(ctx_, s, true);
-            session_ctx_.input_done = input_done;
-        }
+        auto session = get_locked_session(0ull);
+        session->input_str  = s;
+        session->input_done = input_done;
+        session->input_updated = true;
+        log::info("prompt updated");
     }
 
     // here we continously process the prompt
@@ -80,103 +108,95 @@ class llama
         // TODO: configure batch size
         const int batch_size = 32;
         llama_batch batch = llama_batch_init(batch_size, 0, 1);
-        llama_tokens input;
-        // how many processed. Should this be part of session too?
-        size_t n_done = 0;
+        bool sleep_please = false;
+
         while (true)
         {
-            //log::info("iter");
+            if (sleep_please)
             {
-                std::lock_guard<std::mutex> _lock(session_ctx_.mutex);
-                //log::info("checking input");
-                if (input != session_ctx_.tokens)
+                sleep_please = false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            {
+                auto session = get_locked_session(0ull);
+                if (session->input_updated)
+                {
+                    session->tokens = llama_tokenize(ctx_, session->input_str, true);
+                    session->input_updated = false;
+                }
+                if (session->input != session->tokens)
                 {
                     log::info("updating input");
-                    size_t n_matched = std::min(session_ctx_.tokens.size(), input.size());
+                    size_t n_matched = std::min(session->tokens.size(), session->input.size());
                     for (size_t i = 0; i < n_matched; i++)
                     {
-                        if (session_ctx_.tokens[i] != input[i])
+                        if (session->tokens[i] != session->input[i])
                         {
                             n_matched = i;
                             break;
                         }
                     }
-                    input = session_ctx_.tokens;
-                    log::info("done: %zu, matched: %zu", n_done, n_matched);
-                    if (n_done > n_matched)
+                    session->input = session->tokens;
+                    log::info("done: %zu, matched: %zu", session->n_done, n_matched);
+                    if (session->n_done > n_matched)
                     {
-                        n_done = n_matched;
-                        llama_kv_cache_seq_rm(ctx_, 0, n_done, -1);
+                        session->n_done = n_matched;
+                        llama_kv_cache_seq_rm(ctx_, 0, session->n_done, -1);
                     }
                 }
-                else
+                if (session->n_done >= session->input.size())
                 {
-                    //log::info("not updating input");
-                }
-            }
-            if (n_done >= input.size())
-            {
-                //log::info("done current input");
-                bool do_sampling = false;
-                {
-                    std::lock_guard<std::mutex> _lock(session_ctx_.mutex);
-                    do_sampling = session_ctx_.input_done && !session_ctx_.output_done;
-                }
-                if (!do_sampling)
-                {
-                    //log::info("waiting for next chunk");
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    continue;
-                }
-                else
-                {
+                    bool do_sampling = session->input_done && ! session->output_done;
+                    if (!do_sampling)
+                    {
+                        //log::info("waiting for next chunk");
+                        sleep_please = true;
+                        continue;
+                    }
                     //log::info("sample next");
                     llama_token id = llama_sampling_sample(ctx_sampling_, ctx_, nullptr, batch.n_tokens - 1);
                     llama_sampling_accept(ctx_sampling_, ctx_, id, true);
-                    auto out = llama_token_to_piece(ctx_, id);
+                    auto out  = llama_token_to_piece(ctx_, id);
                     bool done = false;
                     // TODO: also compare with n_predict
                     done = llama_token_is_eog(model_, id);
 
-                    {
-                        std::lock_guard<std::mutex> _lock(session_ctx_.mutex);
-                        session_ctx_.output.push(out);
-                        session_ctx_.output_done = done;
-                    }
+                    session->output.push(out);
+                    session->output_done = done;
 
                     if (done)
                     {
                         continue;
                     }
+
                     llama_batch_clear(batch);
-                    llama_batch_add(batch, id, n_done, { 0 }, true);
-                    n_done += 1;
-                    if (llama_decode(ctx_, batch) != 0)
+                    llama_batch_add(batch, id, session->n_done, { 0 }, true);
+                    session->n_done += 1;
+                    log::info("decoding n_done = %zu", session->n_done);
+                }
+                else
+                {
+                    // processing input
+                    //log::info("processing input");
+                    size_t i;
+                    llama_batch_clear(batch);
+                    for (i = 0; i < batch_size && i + session->n_done < session->input.size(); i++)
                     {
-                        log::error("llama_decode() failed");
+                        size_t j = i + session->n_done;
+                        llama_batch_add(batch, session->input[j], j, {0}, false);
                     }
+                    if (i + session->n_done == session->input.size())
+                    {
+                        batch.logits[batch.n_tokens - 1] = true;
+                    }
+                    session->n_done += i;
+                    log::info("priming n_done = %zu", session->n_done);
                 }
             }
-            else
+            // not locking session
+            if (llama_decode(ctx_, batch) != 0)
             {
-                // processing input
-                //log::info("processing input");
-                size_t i;
-                llama_batch_clear(batch);
-                for (i = 0; i < batch_size && i + n_done < input.size(); i++)
-                {
-                    llama_batch_add(batch, input[i + n_done], i + n_done, {0}, false);
-                }
-                if (i + n_done == input.size())
-                {
-                    batch.logits[batch.n_tokens - 1] = true;
-                }
-                if (llama_decode(ctx_, batch) != 0)
-                {
-                    log::error("llama_decode() failed");
-                }
-                n_done += i;
-                log::info("n_done = %zu", n_done);
+                log::error("llama_decode() failed");
             }
         }
     }
@@ -184,14 +204,14 @@ class llama
     bool next(std::string * s)
     {
         //log::info("next()");
-        std::lock_guard<std::mutex> _lock(session_ctx_.mutex);
+        auto session = get_locked_session(0ull);
         *s = "";
-        while (!session_ctx_.output.empty())
+        while (!session->output.empty())
         {
-            *s += session_ctx_.output.front();
-            session_ctx_.output.pop();
+            *s += session->output.front();
+            session->output.pop();
         }
-        return !session_ctx_.output_done;
+        return !session->output_done;
     }
 
   private:
@@ -200,9 +220,8 @@ class llama
     llama_sampling_context * ctx_sampling_;
     std::thread loop_thread_;
 
+    // for all operations on llama context
     std::mutex mutex_;
-
-    session_context session_ctx_;
 };
 
 void serve(std::shared_ptr<llama> llm)
@@ -218,11 +237,12 @@ void serve(std::shared_ptr<llama> llm)
     {
         try
         {
+            log::info("got query");
             auto req_j = json::parse(req.body);
             std::string text = llama3_instruct_fmt_msg(req_j);
             bool complete = req_j["complete"];
 
-            llm->update_prompt(text, complete);
+            llm->update_prompt(/*session_id = */ 0ull, text, complete);
             if (!complete)
             {
                 res.set_content("revcd\n", "application/json");
