@@ -134,7 +134,7 @@ std::string llama3_instruct_fmt_msg(const nlohmann::json & j)
             << msg["content"].get<std::string>() << "<|eot_id|>";
     }
 
-    oss << "<|start_header_id|>assistant<|end_header_id|>";
+    oss << "<|start_header_id|>assistant<|end_header_id|>\n\n";
     return oss.str();
 }
 
