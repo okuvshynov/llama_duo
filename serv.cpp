@@ -218,7 +218,7 @@ class llama
             }
             if (n_done >= input.size())
             {
-                // log::info("done current input");
+                //log::info("done current input");
                 bool do_sampling = false;
                 {
                     std::lock_guard<std::mutex> _lock(mutex_);
@@ -232,7 +232,7 @@ class llama
                 }
                 else
                 {
-                    // sample next
+                    //log::info("sample next");
                     llama_token id = llama_sampling_sample(ctx_sampling_, ctx_, nullptr, batch.n_tokens - 1);
                     llama_sampling_accept(ctx_sampling_, ctx_, id, true);
                     auto out = llama_token_to_piece(ctx_, id);
@@ -338,6 +338,7 @@ void serve(std::shared_ptr<llama> llm)
                         while (true)
                         {
                             bool do_next = llm->next(&next);
+                            //log::info("next is %s", next.c_str());
                             if (!do_next)
                             {
                                 sink.done();
@@ -347,12 +348,13 @@ void serve(std::shared_ptr<llama> llm)
                             if (next.size() == 0)
                             {
                                 // nothing generated yet, wait
-                                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                                std::this_thread::sleep_for(std::chrono::milliseconds(100));
                                 continue;
                             }
 
                             res_j["choices"][0]["delta"]["content"] = next;
-                            std::string res_s = res_j.dump();
+                            std::string res_s = res_j.dump() + "\n";
+                            //log::info("returning %s", res_s.c_str());
                             sink.write(res_s.data(), res_s.size());
                             break;
                         }
