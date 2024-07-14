@@ -1,8 +1,10 @@
-#include <cstdio>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <mutex>
 #include <queue>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -29,6 +31,15 @@ const uint32_t SESSION_PRI_P1 = 8;
 const uint32_t SESSION_PRI_P2 = 6;
 const uint32_t SESSION_PRI_P3 = 4;
 
+// used to generate session id
+uint64_t rand_u64() {
+    static std::random_device rd;
+    static std::mt19937_64 gen(rd());
+    static std::uniform_int_distribution<uint64_t> dis;
+
+    return dis(gen);
+}
+
 
 // this would be session context which would handle both priming
 // queries and conversations. Each conversation is a session.
@@ -36,12 +47,16 @@ struct session_context
 {
     // the input passed. Should include the history,
     // as it is not guaranteed that we'll have cache.
-    // as we produce new tokens we append it here. This can be updated
-    // from both processing and API calls.
+    // as we produce new tokens we append it here. 
+
+    // is updated from API calls only
     std::string  input_str;
     bool         input_updated = false;
+
+    // is updated both from API calls and decoding
     llama_tokens tokens; 
     
+    // is updated only during decoding
     // input we worked on. 
     llama_tokens input;
     // how many of the input above was processed
@@ -270,12 +285,16 @@ void serve(std::shared_ptr<llama> llm)
             auto req_j = json::parse(req.body);
             std::string text = llama3_instruct_fmt_msg(req_j);
             bool complete = req_j["complete"];
-            uint64_t session_id = 0ull;
+            uint64_t session_id = req_j.value("session_id", rand_u64());
 
             llm->update_prompt(session_id, text, complete);
             if (!complete)
             {
-                res.set_content("revcd\n", "application/json");
+                // returning session_id so client can continue the session
+                json res_j;
+                res_j["session_id"] = session_id;
+                std::string res_s = res_j.dump() + "\n";
+                res.set_content(res_s, "application/json");
             }
             else
             {
