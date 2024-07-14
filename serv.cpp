@@ -14,8 +14,21 @@
 
 #include "llm_formats.h"
 #include "logging.h"
+#include "queue.h"
 
 using llama_tokens = std::vector<llama_token>;
+
+// how should we prioritize queries:
+// p0 - user waits for input and we already work on that query
+// p1 - user waits for input but we are not working on that query now
+// p2 - user doesn't wait for input, we are only priming and we work on that query
+// p3 - user doesn't wait for input and we are not working on it
+
+const uint32_t SESSION_PRI_P0 = 10;
+const uint32_t SESSION_PRI_P1 = 8;
+const uint32_t SESSION_PRI_P2 = 6;
+const uint32_t SESSION_PRI_P3 = 4;
+
 
 // this would be session context which would handle both priming
 // queries and conversations. Each conversation is a session.
@@ -36,6 +49,7 @@ struct session_context
 
     // output for the current message.
     // TODO: do we need to support some offset-based indexing for retries?
+    // should this become thread-safe queue with blocking wait?
     std::queue<std::string> output;
 
     // input done - we are ready to generate output
@@ -72,10 +86,14 @@ class locked_session
 };
 
 // just one session for now. This should become a manager with map
-locked_session get_locked_session(uint64_t /* id */)
+locked_session get_locked_session(uint64_t id)
 {
-    static session_context session_ctx;
-    return locked_session(session_ctx);
+    static std::mutex m;
+    static std::map<uint64_t, session_context> sessions;
+    {
+        std::unique_lock<std::mutex> lock(m);
+        return locked_session(sessions[id]);
+    }
 }
 
 // llama itself should be generic enough to support duo/speculation/rpc-based remote runs
@@ -105,10 +123,12 @@ class llama
 
     void update_prompt(uint64_t session_id, std::string s, bool input_done)
     {
-        auto session = get_locked_session(0ull);
+        auto session = get_locked_session(session_id);
         session->input_str  = s;
         session->input_done = input_done;
         session->input_updated = true;
+        // enqueue with p1 or p3 depending on input_done
+        queue_.push(std::make_pair(input_done ? SESSION_PRI_P1 : SESSION_PRI_P3, session_id));
         log::info("prompt updated");
     }
 
@@ -118,17 +138,12 @@ class llama
         // TODO: configure batch size
         const int batch_size = 32;
         llama_batch batch = llama_batch_init(batch_size, 0, 1);
-        bool sleep_please = false;
 
         while (true)
         {
-            if (sleep_please)
+            uint64_t session_id = queue_.pop().second;
             {
-                sleep_please = false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            {
-                auto session = get_locked_session(0ull);
+                auto session = get_locked_session(session_id);
                 if (session->input_updated)
                 {
                     session->tokens = llama_tokenize(ctx_, session->input_str, true);
@@ -160,7 +175,7 @@ class llama
                     if (!do_sampling)
                     {
                         //log::info("waiting for next chunk");
-                        sleep_please = true;
+                        // do not enqueue. we've done everything we could
                         continue;
                     }
                     //log::info("sample next");
@@ -176,6 +191,7 @@ class llama
 
                     if (done)
                     {
+                        // not enqueue as well
                         continue;
                     }
 
@@ -183,6 +199,8 @@ class llama
                     llama_batch_add(batch, id, session->n_done, { 0 }, true);
                     session->n_done += 1;
                     log::info("decoding n_done = %zu", session->n_done);
+                    // enqueue with highest priority
+                    queue_.push(std::make_pair(SESSION_PRI_P0, session_id));
                 }
                 else
                 {
@@ -201,9 +219,10 @@ class llama
                     }
                     session->n_done += i;
                     log::info("priming n_done = %zu", session->n_done);
+                    queue_.push(std::make_pair(SESSION_PRI_P2, session_id));
                 }
             }
-            // not locking session
+            // not locking any session -- is this correct?
             if (llama_decode(ctx_, batch) != 0)
             {
                 log::error("llama_decode() failed");
@@ -211,10 +230,11 @@ class llama
         }
     }
 
-    bool next(std::string * s)
+    // TODO: need to receive session id here
+    bool next(uint64_t session_id, std::string * s)
     {
         //log::info("next()");
-        auto session = get_locked_session(0ull);
+        auto session = get_locked_session(session_id);
         *s = "";
         while (!session->output.empty())
         {
@@ -230,8 +250,7 @@ class llama
     llama_sampling_context * ctx_sampling_;
     std::thread loop_thread_;
 
-    // for all operations on llama context
-    std::mutex mutex_;
+    mt_priority_queue<std::pair<uint32_t, uint64_t>> queue_;
 };
 
 void serve(std::shared_ptr<llama> llm)
@@ -251,8 +270,9 @@ void serve(std::shared_ptr<llama> llm)
             auto req_j = json::parse(req.body);
             std::string text = llama3_instruct_fmt_msg(req_j);
             bool complete = req_j["complete"];
+            uint64_t session_id = 0ull;
 
-            llm->update_prompt(/*session_id = */ 0ull, text, complete);
+            llm->update_prompt(session_id, text, complete);
             if (!complete)
             {
                 res.set_content("revcd\n", "application/json");
@@ -261,13 +281,13 @@ void serve(std::shared_ptr<llama> llm)
             {
                 res.set_chunked_content_provider(
                     "application/json",
-                    [&llm](size_t /* offset */, httplib::DataSink& sink) {
+                    [&llm, session_id](size_t /* offset */, httplib::DataSink& sink) {
                         std::string next;
                         json res_j;
                         res_j["choices"] = json::array();
                         while (true)
                         {
-                            bool do_next = llm->next(&next);
+                            bool do_next = llm->next(session_id, &next);
                             //log::info("next is %s", next.c_str());
                             if (!do_next)
                             {
