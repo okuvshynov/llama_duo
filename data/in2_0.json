@@ -1,0 +1,8 @@
+{
+    "messages": [
+        {"role": "system", "content": "You are a helpful, respectful and honest assistant"},
+        {"role": "user", "content": "What is the capital of the most"}
+    ],
+    "complete": false,
+    "session_id": 1002
+}

@@ -32,23 +32,23 @@ const uint32_t SESSION_PRI_P2 = 6;
 const uint32_t SESSION_PRI_P3 = 4;
 
 // used to generate session id
-uint64_t rand_u64() {
+uint64_t rand_u64()
+{
     static std::random_device rd;
     static std::mt19937_64 gen(rd());
     static std::uniform_int_distribution<uint64_t> dis;
-
     return dis(gen);
 }
 
-
-// this would be session context which would handle both priming
-// queries and conversations. Each conversation is a session.
 struct session_context
 {
+    session_context() {
+        static int32_t seq_id_counter = 0;
+        this->seq_id = seq_id_counter++;
+    }
     // the input passed. Should include the history,
     // as it is not guaranteed that we'll have cache.
     // as we produce new tokens we append it here. 
-
     // is updated from API calls only
     std::string  input_str;
     bool         input_updated = false;
@@ -57,7 +57,7 @@ struct session_context
     llama_tokens tokens; 
     
     // is updated only during decoding
-    // input we worked on. 
+    // input we worked on. TODO: rename this
     llama_tokens input;
     // how many of the input above was processed
     size_t n_done;
@@ -71,6 +71,8 @@ struct session_context
     // output done - we have completed the turn for this session
     bool input_done  = false;
     bool output_done = false;
+
+    int32_t seq_id;
 
   private:
     // what do we do if we are generating output and got input update?
@@ -147,18 +149,19 @@ class llama
         log::info("prompt updated");
     }
 
-    // here we continously process the prompt
     void loop()
     {
         // TODO: configure batch size
-        const int batch_size = 32;
-        llama_batch batch = llama_batch_init(batch_size, 0, 1);
+        const int32_t batch_size = 32;
+        const int32_t max_seq_id = 32;
+        llama_batch batch = llama_batch_init(batch_size, 0, max_seq_id);
 
         while (true)
         {
             uint64_t session_id = queue_.pop().second;
             {
                 auto session = get_locked_session(session_id);
+                int32_t seq_id = session->seq_id;
                 if (session->input_updated)
                 {
                     session->tokens = llama_tokenize(ctx_, session->input_str, true);
@@ -181,7 +184,7 @@ class llama
                     if (session->n_done > n_matched)
                     {
                         session->n_done = n_matched;
-                        llama_kv_cache_seq_rm(ctx_, 0, session->n_done, -1);
+                        llama_kv_cache_seq_rm(ctx_, seq_id, session->n_done, -1);
                     }
                 }
                 if (session->n_done >= session->input.size())
@@ -211,7 +214,7 @@ class llama
                     }
 
                     llama_batch_clear(batch);
-                    llama_batch_add(batch, id, session->n_done, { 0 }, true);
+                    llama_batch_add(batch, id, session->n_done, { seq_id }, true);
                     session->n_done += 1;
                     log::info("decoding n_done = %zu", session->n_done);
                     // enqueue with highest priority
@@ -226,7 +229,7 @@ class llama
                     for (i = 0; i < batch_size && i + session->n_done < session->input.size(); i++)
                     {
                         size_t j = i + session->n_done;
-                        llama_batch_add(batch, session->input[j], j, {0}, false);
+                        llama_batch_add(batch, session->input[j], j, { seq_id }, false);
                     }
                     if (i + session->n_done == session->input.size())
                     {
