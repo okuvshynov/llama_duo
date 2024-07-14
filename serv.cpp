@@ -20,6 +20,8 @@
 
 using llama_tokens = std::vector<llama_token>;
 
+// one option to simplify everything is to make it q/a pairs, not entire discussions. Once answer is completed, session is gone.
+
 // how should we prioritize queries:
 // p0 - user waits for input and we already work on that query
 // p1 - user waits for input but we are not working on that query now
@@ -67,7 +69,7 @@ struct session_context
     // should this become thread-safe queue with blocking wait?
     std::queue<std::string> output;
 
-    // input done - we are ready to generate output
+    // input done  - we are ready to generate output
     // output done - we have completed the turn for this session
     bool input_done  = false;
     bool output_done = false;
@@ -83,9 +85,10 @@ struct session_context
 class locked_session
 {
   public:
-    locked_session(session_context& session_ctx): session_ctx_(&session_ctx), lock_(session_ctx.mutex) {}
+    locked_session(session_context& session_ctx):
+        session_ctx_(&session_ctx), lock_(session_ctx.mutex) {}
     
-    locked_session(const locked_session &) = delete;
+    locked_session(const locked_session &)           = delete;
     locked_session& operator=(const locked_session&) = delete;
 
     locked_session(locked_session && other) noexcept
@@ -102,7 +105,7 @@ class locked_session
     std::unique_lock<std::mutex> lock_;
 };
 
-// just one session for now. This should become a manager with map
+// TODO: reusing sessions
 locked_session get_locked_session(uint64_t id)
 {
     static std::mutex m;
@@ -124,6 +127,7 @@ class llama
         llama_backend_init();
         llama_numa_init(params.numa);
         std::tie(model_, ctx_) = llama_init_from_gpt_params(params);
+        // TODO: this should be per session
         ctx_sampling_ = llama_sampling_init(params.sparams);
 
         loop_thread_ = std::thread(&llama::loop, this);
@@ -141,9 +145,10 @@ class llama
     void update_prompt(uint64_t session_id, std::string s, bool input_done)
     {
         auto session = get_locked_session(session_id);
+
         session->input_str  = s;
-        session->input_done = input_done;
         session->input_updated = true;
+        session->input_done = input_done;
         // enqueue with p1 or p3 depending on input_done
         queue_.push(std::make_pair(input_done ? SESSION_PRI_P1 : SESSION_PRI_P3, session_id));
         log::info("prompt updated");
@@ -320,6 +325,7 @@ void serve(std::shared_ptr<llama> llm)
                             if (next.size() == 0)
                             {
                                 // nothing generated yet, wait
+                                // TODO: make this a queue as well
                                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                                 continue;
                             }
