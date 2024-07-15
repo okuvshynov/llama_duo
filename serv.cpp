@@ -147,10 +147,14 @@ class llama
         auto session = get_locked_session(session_id);
 
         session->input_str  = s;
+        log::info("Entire updated prompt:\n%s\n", s.c_str());
         session->input_updated = true;
         session->input_done = input_done;
         // enqueue with p1 or p3 depending on input_done
         queue_.push(std::make_pair(input_done ? SESSION_PRI_P1 : SESSION_PRI_P3, session_id));
+
+        // got new query?
+        session->output_done = false;
         log::info("prompt updated");
     }
 
@@ -169,7 +173,7 @@ class llama
                 int32_t seq_id = session->seq_id;
                 if (session->input_updated)
                 {
-                    session->tokens = llama_tokenize(ctx_, session->input_str, true);
+                    session->tokens = llama_tokenize(ctx_, session->input_str, true, true);
                     session->input_updated = false;
                 }
                 if (session->input != session->tokens)
@@ -205,6 +209,7 @@ class llama
                     llama_token id = llama_sampling_sample(ctx_sampling_, ctx_, nullptr, batch.n_tokens - 1);
                     llama_sampling_accept(ctx_sampling_, ctx_, id, true);
                     auto out  = llama_token_to_piece(ctx_, id);
+                    log::info("%d -- %s\n", id, out.c_str());
                     bool done = false;
                     // TODO: also compare with n_predict
                     done = llama_token_is_eog(model_, id);

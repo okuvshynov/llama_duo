@@ -9,7 +9,7 @@ std::string llama3_instruct_fmt_msg(const nlohmann::json & j)
 {
     std::ostringstream oss;
     oss << "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n";
-    oss << j.value("system", "") << "<|eot_id|>\n";
+    oss << j.value("system", "") << "<|eot_id|>";
 
     for (const auto& msg: j["messages"])
     {
