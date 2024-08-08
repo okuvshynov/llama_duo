@@ -283,7 +283,6 @@ static void target(
         sctx->done = true;
     }
 
-
     llama_batch_free(batch);
 }
 
@@ -310,15 +309,11 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     // main model and context
-    llama_model * model = nullptr;
-    llama_context * ctx = nullptr;
-    std::tie(model, ctx) = llama_init_from_gpt_params(params);
+    llama_init_result main_init = llama_init_from_gpt_params(params);
+    llama_model * model = main_init.model;
+    llama_context * ctx = main_init.context;
 
     llama_duo::llama_tokens input = llama_tokenize(ctx, params.prompt, true);
-
-    // draft model and contexts.
-    llama_model * draft_model = nullptr;
-    llama_context * draft_ctx = nullptr;
 
     params.model = params.model_draft;
     params.n_gpu_layers = params.n_gpu_layers_draft;
@@ -329,7 +324,10 @@ int main(int argc, char ** argv) {
     params.n_threads_batch = params.n_threads_batch_draft;
 
     params.rpc_servers = draft_rpc;
-    std::tie(draft_model, draft_ctx) = llama_init_from_gpt_params(params);
+    llama_init_result draft_init = llama_init_from_gpt_params(params);
+    // draft model and contexts.
+    llama_model * draft_model = draft_init.model;
+    llama_context * draft_ctx = draft_init.context;
     
     llama_duo::shared_context sctx;
     sctx.candidate = input;
