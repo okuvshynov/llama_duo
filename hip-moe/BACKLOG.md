@@ -16,6 +16,47 @@ K ≲ 20 of 384 under uniform routing (E[C] and capacity both linear in n);
 the trade only clearly wins with real routing skew. Follow-ups spawned
 below.
 
+## cpu_dma_latency: does C6 exit eat the umbrella? (from the tcp-latency study)
+
+Cross-pollination from `~/projects/measures/tcp-latency` (2026-08-22, same
+Mac Pro pair): holding `/dev/cpu_dma_latency` at 0 collapsed the idle-path
+network RTT (idle ping 127 → 35 µs, netperf max 253 → 91) while leaving
+the busy-loop mean unchanged — sparse work pays C-state wakeups,
+continuous work doesn't. The umbrella has the same shape on-box: during a
+GPU wave the cv-parked cold worker and the slept GOMP threads are idle,
+and this machine's C6 costs **133 µs exit / 600 µs target residency**
+(`/sys/devices/system/cpu/cpu0/cpuidle/state3`) — waves at n≥4
+(860-1840 µs) exceed the residency target, so menu can pick C6 and a miss
+may open with up to ~133 µs of wake before the first byte of expert
+weights moves, against a ~550-600 µs pair budget. Existing data it could
+partly explain: the solo placement lottery (488-1003 µs, 46-72 GB/s) and
+pair cost sitting above the streaming estimate.
+
+Plan — instrument, not tg32 (the ~10% load-to-load floor can't resolve
+this; moe-ep-bench's interleaved A/B resolves ~0.5%):
+
+1. **Confirm the sleep happens at all**: delta
+   `/sys/devices/system/cpu/cpu*/cpuidle/state3/usage` (or turbostat)
+   across a 50-rep `--cpu-experts` run. If C6 entries ≈ 0 during the
+   bench loop, expect a null here and the effect belongs only to sparse
+   serving (inter-token idle at 15 t/s), not to the bench.
+2. **A/B**: `measures/tcp-latency/hold-cpu-dma-latency.py` held (root)
+   vs not. Can't interleave rep-by-rep across a root process — alternate
+   whole invocations, ≥3 per arm. Cells: the C=1/C=2 rows (pick K from
+   `--probe`, the K=16-caught-nothing lesson) plus the solo price list.
+3. **Read tails, not means**: the tcp result was mean-neutral and
+   tail-collapsing; per-rep cpu-wall spread and the solo min-max band are
+   where 133 µs would show.
+4. **Confounder from the same study**: the tcp work left this box's CPU
+   governor on `performance` (non-persistent, survives until reboot) —
+   record the governor with every arm, since prior umbrella numbers were
+   taken under a different setting.
+5. **If it wins**: interacts with "Serving-mode wait policy" below —
+   blocking sync frees a core precisely by letting it sleep, so measure
+   that config with and without the cap before adopting either. Cost of
+   the cap: cores floor at C1, idle power rises; the always-on policy
+   decision lives with tcp-latency's persistence item, not here.
+
 ## Cold-expert follow-ups (from the umbrella measurement)
 
 - Grouped-gemm mul_mat_id on the CPU repack path: when multiple rows hit
