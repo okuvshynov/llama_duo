@@ -1,0 +1,17 @@
+// A tiny event emitter with once() support and wildcard listeners.
+// No dependencies, ES2020, meant to be dropped into a browser or Node project.
+
+export class Emitter {
+  constructor() {
+    this.listeners = new Map(); // event name -> Set of handlers
+  }
+
+  on(event, handler) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event).add(handler);
+    return () => this.off(event, handler);
+  }
+
+  off(event, handler) {

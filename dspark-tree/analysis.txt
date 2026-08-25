@@ -1,0 +1,86 @@
+loading markov tensors from /home/oleksandr/llms/dspark/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf ...
+  processing c.dstree (512 records) ...
+  c: 512 records, reconstruction max|err| = 1.53e-05
+  processing js.dstree (512 records) ...
+  js: 512 records, reconstruction max|err| = 4.58e-05
+  processing math.dstree (512 records) ...
+  math: 512 records, reconstruction max|err| = 1.53e-05
+  processing prose.dstree (512 records) ...
+  prose: 512 records, reconstruction max|err| = 3.05e-05
+  processing python.dstree (512 records) ...
+  python: 512 records, reconstruction max|err| = 2.29e-05
+  processing story.dstree (512 records) ...
+  story: 512 records, reconstruction max|err| = 2.29e-05
+
+sanity: reconstruction max|biased - base - bias(prev)| = 4.58e-05 over 15360 slots
+saved per-record stats to results/stats.npz
+
+=== 3048 full-depth records (of 3072) across 6 prompts ===
+
+P(true token in drafter's top-k at slot i | true prefix):
+  slot |   top-1    top-2    top-4    top-8   top-16
+     1 |   0.877    0.934    0.968    0.982    0.991
+     2 |   0.818    0.886    0.922    0.947    0.963
+     3 |   0.761    0.835    0.883    0.907    0.933
+     4 |   0.703    0.785    0.839    0.875    0.907
+     5 |   0.664    0.751    0.809    0.851    0.884
+
+Single-chain (greedy) mean accepted length:
+  n=1: 0.877 accepted of 1 drafted (0.877 acceptance, 1.877 tokens/verify)
+  n=2: 1.634 accepted of 2 drafted (0.817 acceptance, 2.634 tokens/verify)
+  n=3: 2.285 accepted of 3 drafted (0.762 acceptance, 3.285 tokens/verify)
+  n=4: 2.845 accepted of 4 drafted (0.711 acceptance, 3.845 tokens/verify)
+  n=5: 3.335 accepted of 5 drafted (0.667 acceptance, 4.335 tokens/verify)
+
+Top-k tree frontier (best non-increasing width vector per budget):
+  draft-tokens | mean accepted | tokens/verify | shape
+           1 |        0.877 |         1.877 | 1
+           2 |        1.634 |         2.634 | 1x1
+           3 |        2.285 |         3.285 | 1x1x1
+           4 |        2.845 |         3.845 | 1x1x1x1
+           5 |        3.335 |         4.335 | 1x1x1x1x1
+          10 |        3.454 |         4.454 | 2x1x1x1x1
+          15 |        3.500 |         4.500 | 3x1x1x1x1
+          18 |        3.580 |         4.580 | 2x2x1x1x1
+          27 |        3.630 |         4.630 | 3x2x1x1x1
+          30 |        3.678 |         4.678 | 2x2x2x1x1
+          45 |        3.729 |         4.729 | 3x2x2x1x1
+          46 |        3.763 |         4.763 | 2x2x2x2x1
+          62 |        3.809 |         4.809 | 2x2x2x2x2
+
+Best-N-node tree (nodes ranked by joint drafter prob, exact up to N=128):
+  N (draft-tokens) | mean accepted | tokens/verify
+               1 |        0.877 |         1.877
+               2 |        1.641 |         2.641
+               3 |        2.306 |         3.306
+               4 |        2.887 |         3.887
+               6 |        3.513 |         4.513
+               8 |        3.650 |         4.650
+              12 |        3.793 |         4.793
+              16 |        3.868 |         4.868
+              24 |        3.951 |         4.951
+              32 |        4.006 |         5.006
+              48 |        4.068 |         5.068
+              64 |        4.106 |         5.106
+              96 |        4.160 |         5.160
+             128 |        4.206 |         5.206
+
+Per-prompt mean accepted length (chain n=3 / n=5 | top-k tree 2x2x1 (8 tok) / 4x2x2x1x1 (30 tok)):
+         c: 2.837 / 4.457 | 2.900 / 4.638   (508 records)
+        js: 2.593 / 3.923 | 2.752 / 4.309   (508 records)
+      math: 2.663 / 4.030 | 2.813 / 4.344   (508 records)
+     prose: 1.394 / 1.593 | 1.795 / 2.356   (508 records)
+    python: 2.766 / 4.331 | 2.880 / 4.594   (508 records)
+     story: 1.459 / 1.675 | 1.748 / 2.270   (508 records)
+
+Confidence-head calibration (greedy chain, all slots pooled):
+  conf bucket | mean conf | P(chain token correct) | count
+  [0.00,0.20) |    0.164  |          0.059       | 747
+  [0.20,0.40) |    0.298  |          0.189       | 2009
+  [0.40,0.50) |    0.451  |          0.316       | 882
+  [0.50,0.60) |    0.551  |          0.466       | 948
+  [0.60,0.70) |    0.651  |          0.587       | 888
+  [0.70,0.80) |    0.751  |          0.698       | 998
+  [0.80,0.90) |    0.850  |          0.816       | 1224
+  [0.90,0.95) |    0.927  |          0.887       | 758
+  [0.95,1.00) |    0.994  |          0.985       | 6763

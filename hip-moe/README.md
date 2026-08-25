@@ -226,6 +226,13 @@ nothing else — the kernel and the border are both settled.
 
 ## DSpark speculative decoding (2026-08-17)
 
+> Follow-up (2026-08-25): `dspark-tree/` studies this drafter offline — draft
+> *trees* vs the chain, exact via the Markov-head structure. Verdict: width
+> buys little (+0.7 accepted tokens costs 25x the draft budget); the
+> checkpoint's block_size=5 truncates a fat right tail (~49% of drafts accept
+> all 5 at a near-constant 0.86/slot continuation rate), so depth is the
+> lever. Offline chain acceptance reproduces this section's 0.76 at n=3.
+
 Unsloth ships a DSpark drafter extracted from the official checkpoint
 (`dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf`, 10.9 GB, arch dflash; our
 build b10472 clears every version window on the card). Q8_0 over BF16:

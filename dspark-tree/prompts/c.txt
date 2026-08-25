@@ -1,0 +1,28 @@
+/* ring.c - a fixed-capacity single-producer single-consumer byte ring buffer.
+ *
+ * The buffer holds cap-1 bytes at most; head == tail means empty. All indices
+ * wrap with a bitmask, so cap must be a power of two. No locking: the producer
+ * only writes head, the consumer only writes tail.
+ */
+
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+
+typedef struct {
+    uint8_t *data;
+    size_t   cap;   /* power of two */
+    size_t   head;  /* next write index */
+    size_t   tail;  /* next read index */
+} ring_t;
+
+static size_t ring_used(const ring_t *r) {
+    return (r->head - r->tail) & (r->cap - 1);
+}
+
+static size_t ring_free(const ring_t *r) {
+    return r->cap - 1 - ring_used(r);
+}
+
+/* Copy up to n bytes into the ring; returns the number actually written. */
+size_t ring_write(ring_t *r, const uint8_t *src, size_t n) {
