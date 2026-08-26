@@ -733,3 +733,21 @@ exactly what moe-ep-bench said it would. Consequence: a fixed n_max is
 wrong for mixed workloads; the calibrated confidence head (dspark-tree)
 plus `--spec-draft-p-min` gating is the right next lever — it would cut
 prose drafts at position 1 while letting code run to 3+.
+
+### Verify-batch cost: an 8-wide tile boundary makes a draft of 8 the worst value (2026-08-26)
+
+Why did n=8 underperform even on same-text code? llama-bench pp1..pp17 at
+d=0 and d=512 on the serving placement (`results/glm52-verify-batch-cost.md`)
+gives the verify cost directly: a batch of N tokens costs
+`~260 + ~140*(N-1) + ~280*floor((N-1)/8)` ms — a marginal draft token is
+cheap (~140 ms, half the single-token pass: the umbrella amortization), but
+crossing a multiple of 8 adds a ~280 ms step. Batch 9 (= draft of 8) and
+batch 17 jump identically at both depths, so it is matmul column tiling
+(8-wide), not attention. At python n=8's 42 cycles the step accounts for
+~18% of the run — real, secondary to acceptance. Consequences: efficient
+draft depths are n <= 7 (verify batch <= 8), and after 7 the next sensible
+stop is 15; the n_max sweep's optima (1-3) sit well inside the first tile
+anyway. tg128 = 4.05 t/s cross-checks the server's no-spec baseline (4.09).
+Expert placement at this config, for reference: 69/31 CPU/GPU by expert
+bytes (212.5 vs 94.7 GiB), which is why the CPU phase owns ~85% of the
+cycle wall-clock.
