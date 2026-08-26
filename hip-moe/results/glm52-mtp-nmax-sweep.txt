@@ -1,0 +1,64 @@
+# GLM-5.2 UD-Q3_K_XL, draft-mtp n_max sweep, 2026-08-26
+# One llama-server load (-ncmoe 56 -ts 59/7/7/7 -c 8192, startup --spec-draft-n-max 8);
+# per-request speculative.n_max via local llama.cpp patch (3 files, see hip-moe/README.md):
+#   server-schema.cpp: enable the disabled speculative.n_max request field
+#   server-context.cpp get_n_draft_max(): clamp by task->params.speculative.draft.n_max
+#   common/speculative.cpp draft_mtp loop: honor per-call dp.n_max (was startup-only)
+# Greedy (temp 0, top_k 1), 300 tokens, cache_prompt off, prompts from dspark-tree/prompts/.
+# n=0 = drafting disabled on the same load. Trailing n=3 = drift sentinel.
+# Hash warnings = batch-shape arithmetic flipping a near-tie greedy token (known ~1e-3
+# logit noise), so some rows decode different text; effect sizes dwarf the confound.
+
+ python n=0   4.087 t/s  drafts         -  wall  95.0s  hash f46e28d262e2
+ python n=1   4.961 t/s  drafts   149/150  wall  78.8s  hash f46e28d262e2
+ python n=2   5.365 t/s  drafts   197/203  wall  74.2s  hash f46e28d262e2
+ python n=3   5.590 t/s  drafts   223/228  wall  72.0s  hash f46e28d262e2
+ python n=4   4.264 t/s  drafts   218/321  wall  88.7s  hash 5779f66ccf69
+  WARNING: text differs from n=0 run (greedy should be exact)
+ python n=5   3.906 t/s  drafts   223/374  wall  95.1s  hash 5779f66ccf69
+  WARNING: text differs from n=0 run (greedy should be exact)
+ python n=6   3.578 t/s  drafts   226/430  wall 102.2s  hash 5779f66ccf69
+  WARNING: text differs from n=0 run (greedy should be exact)
+ python n=8   4.591 t/s  drafts   258/323  wall  83.6s  hash f46e28d262e2
+ python n=3   5.605 t/s  drafts   223/228  wall  71.8s  hash f46e28d262e2
+  prose n=0   4.037 t/s  drafts         -  wall  92.4s  hash de8bb7d55918
+  prose n=1   4.277 t/s  drafts   122/176  wall  87.2s  hash f625c756f9c0
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=2   3.735 t/s  drafts   150/296  wall  97.3s  hash f625c756f9c0
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=3   3.117 t/s  drafts   160/416  wall 113.3s  hash 57c16674e2f7
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=4   2.559 t/s  drafts   160/552  wall 134.3s  hash ad3253319961
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=5   2.216 t/s  drafts   161/680  wall 152.4s  hash dee9facba9c4
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=6   1.924 t/s  drafts   160/826  wall 172.9s  hash f5d005161a70
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=8   1.447 t/s  drafts  163/1069  wall 224.4s  hash d69c6b0bfcb9
+  WARNING: text differs from n=0 run (greedy should be exact)
+  prose n=3   3.119 t/s  drafts   160/416  wall 113.2s  hash 57c16674e2f7
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=0   4.048 t/s  drafts         -  wall  92.5s  hash 59034a27d332
+   math n=1   4.965 t/s  drafts   148/151  wall  78.4s  hash bb752e0da694
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=2   5.234 t/s  drafts   194/210  wall  75.3s  hash bb752e0da694
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=3   4.967 t/s  drafts   212/258  wall  78.3s  hash bb752e0da694
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=4   4.242 t/s  drafts   217/326  wall  88.6s  hash 32a9c505c750
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=5   3.971 t/s  drafts   224/372  wall  93.5s  hash 32a9c505c750
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=6   3.711 t/s  drafts   228/421  wall  98.8s  hash 32a9c505c750
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=8   2.876 t/s  drafts   232/527  wall 122.2s  hash 32a9c505c750
+  WARNING: text differs from n=0 run (greedy should be exact)
+   math n=3   4.937 t/s  drafts   212/258  wall  78.7s  hash bb752e0da694
+  WARNING: text differs from n=0 run (greedy should be exact)
+
+wrote sweep_nmax_results.jsonl
+
+ prompt | n= 0 | n= 1 | n= 2 | n= 3 | n= 4 | n= 5 | n= 6 | n= 8 | n=3 rerun
+ python |  4.09 |  4.96 |  5.37 |  5.59 |  4.26 |  3.91 |  3.58 |  4.59 |  5.61
+  prose |  4.04 |  4.28 |  3.73 |  3.12 |  2.56 |  2.22 |  1.92 |  1.45 |  3.12
+   math |  4.05 |  4.96 |  5.23 |  4.97 |  4.24 |  3.97 |  3.71 |  2.88 |  4.94

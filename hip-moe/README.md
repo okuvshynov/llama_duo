@@ -700,3 +700,36 @@ cycle = ~505 ms CPU phase (14-16 cores streaming the 53 CPU expert layers,
 85% of the cycle is CPU expert streaming with all dies idle; during the
 wave, 3 of 4 dies idle — the umbrella overlap and the pipeline gap, both
 now visible per-millisecond.
+
+### The n_max sweep: draft depth is mode-dependent, and deep drafts can lose to no speculation (2026-08-26)
+
+Per-request `speculative.n_max` enabled by a local 3-file llama.cpp patch
+(the field existed but was `#if 0`-disabled, and the MTP draft loop ignored
+the per-call cap in favor of the startup value — enabling the field alone
+would have silently done nothing). One server load, greedy, 300 tokens per
+run, drafting disabled (n=0) as the same-load baseline, n=3 rerun at the
+end of each prompt as a drift sentinel (all matched to 0.06-0.3%). Full
+output: `results/glm52-mtp-nmax-sweep.txt` (+ .jsonl).
+
+t/s by prompt (dspark-tree prompts) and n_max:
+
+| prompt | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| python | 4.09 | 4.96 | 5.37 | **5.59** | 4.26* | 3.91* | 3.58* | 4.59 |
+| prose | 4.04 | **4.28** | 3.73 | 3.12 | 2.56 | 2.22 | 1.92 | 1.45 |
+| math | 4.05 | 4.96 | **5.23** | 4.97 | 4.24 | 3.97 | 3.71 | 2.88 |
+
+(* decoded a different text: batch-shape arithmetic flips a near-tie greedy
+token, so a few rows aren't text-identical; the same-text python n=8 row
+still loses to n=3 by 1.0 t/s, which settles the peak location regardless.)
+
+Optimum: code 3 (+37%), math 2 (+29%), prose 1 (+6%) — and prose collapses
+monotonically to 1.45 t/s at n=8, 2.8x SLOWER than no speculation, with
+accepted tokens flat (~160) while draft cost grows linearly. Python n=8
+accepts 6.1 tokens per verify cycle (greedy, code) and still loses: the
+verify batch of 9 more than doubles the per-cycle CPU expert stream (42
+cycles at 1.56 s vs 77 at 0.70 s for n=3) — the umbrella cost curve doing
+exactly what moe-ep-bench said it would. Consequence: a fixed n_max is
+wrong for mixed workloads; the calibrated confidence head (dspark-tree)
+plus `--spec-draft-p-min` gating is the right next lever — it would cut
+prose drafts at position 1 while letting code run to 3+.
