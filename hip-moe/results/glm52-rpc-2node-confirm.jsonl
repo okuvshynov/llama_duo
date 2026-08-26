@@ -1,0 +1,9 @@
+{"n_max": 0, "wall_s": 70.0, "predicted_n": 300, "tps": 5.317, "draft_n": 0, "draft_acc": 0, "hash": "f46e28d262e2", "prompt": "python"}
+{"n_max": 3, "wall_s": 48.7, "predicted_n": 300, "tps": 8.182, "draft_n": 231, "draft_acc": 222, "hash": "f46e28d262e2", "prompt": "python"}
+{"n_max": 3, "wall_s": 48.6, "predicted_n": 300, "tps": 8.182, "draft_n": 231, "draft_acc": 222, "hash": "f46e28d262e2", "prompt": "python"}
+{"n_max": 0, "wall_s": 68.5, "predicted_n": 300, "tps": 5.298, "draft_n": 0, "draft_acc": 0, "hash": "8740376ff9ec", "prompt": "prose"}
+{"n_max": 3, "wall_s": 81.3, "predicted_n": 300, "tps": 4.299, "draft_n": 444, "draft_acc": 150, "hash": "91853fc1b378", "prompt": "prose"}
+{"n_max": 3, "wall_s": 81.1, "predicted_n": 300, "tps": 4.315, "draft_n": 444, "draft_acc": 150, "hash": "91853fc1b378", "prompt": "prose"}
+{"n_max": 0, "wall_s": 68.5, "predicted_n": 300, "tps": 5.314, "draft_n": 0, "draft_acc": 0, "hash": "32a9c505c750", "prompt": "math"}
+{"n_max": 3, "wall_s": 56.3, "predicted_n": 300, "tps": 6.764, "draft_n": 281, "draft_acc": 205, "hash": "32a9c505c750", "prompt": "math"}
+{"n_max": 3, "wall_s": 56.1, "predicted_n": 300, "tps": 6.788, "draft_n": 281, "draft_acc": 205, "hash": "32a9c505c750", "prompt": "math"}

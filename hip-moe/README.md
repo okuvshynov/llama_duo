@@ -781,7 +781,17 @@ contiguous pure-GPU expert layers, crossing the network exactly twice per
 token (2x 24 KB activations, negligible at ~250 ms/token). Stub validation
 (ds4-L4 fully remote): 59.5 t/s vs 87.3 local, ~5.3 ms/token RPC overhead.
 
-Open: numbers are one-load; ROCm0 has slack for 1-2 more expert layers now
-that the compute buffer is back to 2.4 GiB; two-machine loadtrace (remote
-dies during the local CPU phase) would say whether the remaining 24 CPU
-expert layers merit EP treatment.
+Confirmed on a second load (llama-server, same greedy 300-token workloads
+as the n_max sweep; `results/glm52-rpc-2node-confirm.txt`): no-spec decode
+is a uniform 5.30-5.32 t/s across prompts (+31% over 1-node), and n=3
+gives **python 8.18 (+46%), math 6.78 (+36%), prose 4.30 (+38%)** —
+sentinels repeat to 0.2-0.4%. Acceptance structure unchanged (96/73/34%),
+so the mode-dependence carries over: prose n=3 still loses to prose n=0 on
+two nodes, and the p_min case stands. python n=0 reproduced the 1-node
+greedy text byte-identically across the completely different 8-device
+split.
+
+Open: ROCm0 has slack for 1-2 more expert layers now that the compute
+buffer is back to 2.4 GiB; two-machine loadtrace (remote dies during the
+local CPU phase) would say whether the remaining 24 CPU expert layers
+merit EP treatment.

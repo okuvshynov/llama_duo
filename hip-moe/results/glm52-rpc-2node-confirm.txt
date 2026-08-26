@@ -1,0 +1,18 @@
+# GLM-5.2 2-node RPC confirmation runs, 2026-08-26
+# Second load of the chat-glm-5.2-rpc.sh config (llama-server, SPEC_N startup cap 8),
+# same greedy 300-token workloads as results/glm52-mtp-nmax-sweep.txt, per-request
+# speculative.n_max: 0 = drafting off, 3 = script default, second n=3 = drift sentinel.
+# 1-node comparison rows: python 4.09/5.59, prose 4.04/3.12, math 4.05/4.97 (n=0/n=3).
+
+ python n=0   5.317 t/s  drafts         -  wall  70.0s  hash f46e28d262e2
+ python n=3   8.182 t/s  drafts   222/231  wall  48.7s  hash f46e28d262e2
+ python n=3   8.182 t/s  drafts   222/231  wall  48.6s  hash f46e28d262e2
+  prose n=0   5.298 t/s  drafts         -  wall  68.5s  hash 8740376ff9ec
+  prose n=3   4.299 t/s  drafts   150/444  wall  81.3s  hash 91853fc1b378
+  prose n=3   4.315 t/s  drafts   150/444  wall  81.1s  hash 91853fc1b378
+   math n=0   5.314 t/s  drafts         -  wall  68.5s  hash 32a9c505c750
+   math n=3   6.764 t/s  drafts   205/281  wall  56.3s  hash 32a9c505c750
+   math n=3   6.788 t/s  drafts   205/281  wall  56.1s  hash 32a9c505c750
+
+wrote sweep_rpc_results.jsonl
+
