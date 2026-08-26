@@ -1,0 +1,48 @@
+# GLM-5.2 across two machines via llama.cpp RPC — key excerpts, 2026-08-26
+# Setup: local build-hip + GGML_RPC=ON; remote (tomb, 192.168.2.4) worktree at the
+# same commit 60eeeb608, ggml-rpc-server -H 192.168.2.4 -p 50052 exposing 4 dies.
+
+## Device registration (--rpc must precede --list-devices; RPC slots come first in -ts)
+Available devices:
+  ROCm0: AMD Radeon Graphics (32752 MiB, 32686 MiB free)
+  ROCm1: AMD Radeon Graphics (32752 MiB, 32686 MiB free)
+  ROCm2: AMD Radeon Graphics (32752 MiB, 32686 MiB free)
+  ROCm3: AMD Radeon Graphics (32752 MiB, 32686 MiB free)
+  RPC0: 192.168.2.4:50052 (32752 MiB, 32396 MiB free)
+  RPC1: 192.168.2.4:50052 (32752 MiB, 32390 MiB free)
+  RPC2: 192.168.2.4:50052 (32752 MiB, 32396 MiB free)
+  RPC3: 192.168.2.4:50052 (32752 MiB, 32402 MiB free)
+
+## Stub validation (ds4-L4, all layers forced remote): 59.5 t/s vs 87.3 local
+0.03.559.324 I load_tensors: RPC0[192.168.2.4:50052] model buffer size =  7047.99 MiB
+0.03.559.324 I load_tensors: RPC1[192.168.2.4:50052] model buffer size =  3560.52 MiB
+0.03.559.325 I load_tensors: RPC2[192.168.2.4:50052] model buffer size =  3529.29 MiB
+0.03.559.326 I load_tensors: RPC3[192.168.2.4:50052] model buffer size =  1010.27 MiB
+0.45.778.317 I slot print_timing: id  0 | task 0 | prompt eval time =      94.39 ms /     9 tokens (   10.49 ms per token,    95.35 tokens per second)
+0.45.778.322 I slot print_timing: id  0 | task 0 |        eval time =     386.37 ms /    24 tokens (   16.80 ms per token,    59.53 tokens per second)
+
+## Failed placement (light layers remote, experts local CPU): staging buffer 3.8 GiB, OOM
+|5.33.564.641 E ggml_backend_cuda_buffer_type_alloc_buffer: allocating 3784.50 MiB on device 0: cudaMalloc failed: out of memory
+5.33.564.650 E ggml_gallocr_reserve_n_impl: failed to allocate ROCm0 buffer of size 3968334976
+
+## Sandwich placement (-ncmoe 27 -dev ROCm0,ROCm1,RPC0..3,ROCm2,ROCm3 -ts 31/7/7/7/7/7/7/7)
+0.12.970.803 I load_tensors:        ROCm0 model buffer size = 23360.32 MiB
+0.12.970.805 I load_tensors:        ROCm1 model buffer size = 29438.97 MiB
+0.12.970.807 I load_tensors:        ROCm2 model buffer size = 29438.97 MiB
+0.12.970.808 I load_tensors:        ROCm3 model buffer size = 29102.43 MiB
+0.12.970.810 I load_tensors: RPC0[192.168.2.4:50052] model buffer size = 29438.97 MiB
+0.12.970.811 I load_tensors: RPC1[192.168.2.4:50052] model buffer size = 29438.97 MiB
+0.12.970.813 I load_tensors: RPC2[192.168.2.4:50052] model buffer size = 29438.97 MiB
+0.12.970.814 I load_tensors: RPC3[192.168.2.4:50052] model buffer size = 29438.97 MiB
+-5.38.165.428 I sched_reserve:      ROCm0 compute buffer size =  2396.07 MiB
+5.38.165.437 I sched_reserve:      ROCm1 compute buffer size =   272.07 MiB
+5.38.165.440 I sched_reserve: RPC0[192.168.2.4:50052] compute buffer size =   268.07 MiB
+5.38.165.442 I sched_reserve: RPC1[192.168.2.4:50052] compute buffer size =   264.07 MiB
+5.38.165.444 I sched_reserve: RPC2[192.168.2.4:50052] compute buffer size =   268.07 MiB
+5.38.165.446 I sched_reserve: RPC3[192.168.2.4:50052] compute buffer size =   272.07 MiB
+6.03.201.409 I slot print_timing: id  0 | task 0 | prompt eval time =    2822.71 ms /    23 tokens (  122.73 ms per token,     8.15 tokens per second)
+6.03.201.411 I slot print_timing: id  0 | task 0 |        eval time =   19084.98 ms /   128 tokens (  150.28 ms per token,     6.65 tokens per second)
+6.03.201.412 I slot print_timing: id  0 | task 0 |       total time =   21907.69 ms /   151 tokens
+6.03.201.418 I slot print_timing: id  0 | task 0 |    graphs reused =         40
+6.03.201.423 I slot print_timing: id  0 | task 0 | draft acceptance = 0.71074 (   86 accepted /   121 generated), mean len =  3.10
+6.03.201.424 I slot print_timing: id  0 | task 0 |      acc per pos = (0.902, 0.707, 0.488)

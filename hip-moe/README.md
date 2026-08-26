@@ -751,3 +751,37 @@ anyway. tg128 = 4.05 t/s cross-checks the server's no-spec baseline (4.09).
 Expert placement at this config, for reference: 69/31 CPU/GPU by expert
 bytes (212.5 vs 94.7 GiB), which is why the CPU phase owns ~85% of the
 cycle wall-clock.
+
+### GLM-5.2 across two machines: llama.cpp RPC, 8 dies, 6.65 t/s (2026-08-26)
+
+`chat-glm-5.2-rpc.sh` — the model split across both Mac Pros (local +
+tomb/192.168.2.4, 4 Vega II dies each, 256 GB HBM total) with llama.cpp's
+RPC backend. One-load numbers: **decode 6.65 t/s with MTP (+46% over the
+4.56 single-machine), pp 8.15 t/s**, acceptance 0.71 (normal band). Expert
+residency 52 of 76 layers in HBM (~69% of expert bytes) vs 23 (31%)
+single-machine; load 5.6 min warm, ~118 GiB over 10GbE near line rate.
+Key excerpts: `results/glm52-rpc-2node.txt`.
+
+Setup: both sides need GGML_RPC=ON at the SAME llama.cpp commit (the RPC
+protocol is version-checked; tomb was ahead, so it got a worktree at our
+commit — `~/projects/llama.cpp-rpc`, `build-hip-rpc`). `ggml-rpc-server`
+exposes all four remote dies from one process; it is unauthenticated, so
+bind it to the private switched LAN only.
+
+The placement that works is a sandwich, and the one that fails teaches the
+rule: RPC devices otherwise take the FIRST `-ts` slots, which hands them
+the front layers — but the front layers' experts live on the LOCAL CPU
+(`-ncmoe`), so remote attention interleaves with local-CPU experts, ~46
+network crossings per token, and the scheduler's ROCm0 staging buffer
+balloons to 3.8 GiB and OOMs. `-dev ROCm0,ROCm1,RPC0..3,ROCm2,ROCm3`
+reorders so local dies hold the front (light layers + CPU-expert region +
+2.4 GiB compute buffer) and the tail (big 4.9 GiB layers + blk.78/MTP +
+output — drafting and sampling never cross the wire); the remote block is
+contiguous pure-GPU expert layers, crossing the network exactly twice per
+token (2x 24 KB activations, negligible at ~250 ms/token). Stub validation
+(ds4-L4 fully remote): 59.5 t/s vs 87.3 local, ~5.3 ms/token RPC overhead.
+
+Open: numbers are one-load; ROCm0 has slack for 1-2 more expert layers now
+that the compute buffer is back to 2.4 GiB; two-machine loadtrace (remote
+dies during the local CPU phase) would say whether the remaining 24 CPU
+expert layers merit EP treatment.
