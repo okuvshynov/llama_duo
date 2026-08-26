@@ -795,3 +795,26 @@ Open: ROCm0 has slack for 1-2 more expert layers now that the compute
 buffer is back to 2.4 GiB; two-machine loadtrace (remote dies during the
 local CPU phase) would say whether the remaining 24 CPU expert layers
 merit EP treatment.
+
+### Packing the per-die slack with expert-tensor fragments: pays only under speculation (2026-08-26)
+
+The 2-node placement leaves ~2.6 GiB per full die and 6.3 on ROCm0 —
+smaller than a 4.2 GiB expert layer, but not smaller than its *tensors*
+(up/gate 1176 MiB, down 1632). `-ot` placed before `-ncmoe` (first regex
+match wins in llama-model-loader) packs fragments into measured slack:
+`-ncmoe 24`, blk.26 whole on ROCm0, blk.25 split across local dies,
+blk.24-23 partly on remote dies — CPU expert bytes 97.0 -> 82.7 GiB
+(results/glm52-rpc-2node-packed.txt; all 8 fragments verified by
+"overridden to" lines).
+
+Clean same-text rows: n=3 improves (python 8.18 -> 8.54, math 6.78 ->
+6.95) but n=0 *regresses* ~3.4% across all prompts. Mechanism: the four
+remote fragments add a fixed round-trip cost per graph (~11 ms/token at
+batch 1, vs only ~4.7 ms of CPU streaming saved — a token touches 8 of
+256 experts), while a verify batch of 4 scales the CPU saving ~4x against
+the same fixed cost. Same fixed-vs-batch structure as the umbrella and
+the split-boundary yardstick. The serving default (spec on) is better
+packed; chat-glm-5.2-rpc.sh keeps the simpler confirmed ncmoe-27 config
+for now. Untested variant: local-only fragments (blk.25+26, remote dies
+untouched) — should keep ~40% of the CPU saving at near-zero split cost
+and win in both regimes.

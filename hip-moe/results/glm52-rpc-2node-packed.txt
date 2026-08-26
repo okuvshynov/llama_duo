@@ -1,0 +1,37 @@
+# GLM-5.2 2-node: tensor-fragment packing experiment, 2026-08-26
+# Same server/workloads as glm52-rpc-2node-confirm.txt, but -ncmoe 24 with 8 expert-tensor
+# fragments packed into the measured per-die slack via -ot (placed BEFORE -ncmoe: first
+# regex match wins in llama-model-loader). blk.26 whole on ROCm0; blk.25 up/gate/down on
+# ROCm0/1/2; blk.24 up on ROCm3, gate/down on RPC0/1; blk.23 up/gate on RPC2/3 (down stays
+# CPU). CPU expert bytes 97.0 -> 82.7 GiB. All 8 fragments verified by 'overridden to'
+# lines (69 = 20 full CPU layers x3 + blk.23 down + 8 fragments).
+#
+# vs ncmoe-27 config (clean same-text rows): python n=0 5.32->5.15 (-3.2%), n=3 8.18->8.54
+# (+4.4%); math n=0 5.31->5.14 (-3.4%), n=3 6.78->6.95 (+2.5%, identical 205/281 accepts).
+# prose text changed (batch-shape arithmetic), rows not comparable.
+# Mechanism: remote fragments add fixed round-trip cost per graph (~11 ms/token at batch 1
+# vs ~4.7 ms CPU saved); in a verify batch of 4 the CPU saving scales ~4x while the
+# round-trip cost is fixed -> net positive only with speculation on.
+
+ python n=0   5.148 t/s  drafts         -  wall  70.8s  hash f46e28d262e2
+ python n=3   8.539 t/s  drafts   223/228  wall  46.3s  hash f46e28d262e2
+ python n=3   8.544 t/s  drafts   223/228  wall  46.2s  hash f46e28d262e2
+  prose n=0   5.110 t/s  drafts         -  wall  69.7s  hash ccb0fd38e21e
+  prose n=3   5.036 t/s  drafts   168/390  wall  70.2s  hash 1c2378960400
+  prose n=3   5.082 t/s  drafts   168/390  wall  69.7s  hash 1c2378960400
+   math n=0   5.135 t/s  drafts         -  wall  69.6s  hash 32a9c505c750
+   math n=3   6.964 t/s  drafts   205/281  wall  54.1s  hash 32a9c505c750
+   math n=3   6.941 t/s  drafts   205/281  wall  54.2s  hash 32a9c505c750
+
+wrote sweep_rpc_results.jsonl
+
+
+## placement
+0.12.938.873 I load_tensors:        ROCm0 model buffer size = 28520.32 MiB
+0.12.938.875 I load_tensors:        ROCm1 model buffer size = 30614.97 MiB
+0.12.938.877 I load_tensors:        ROCm2 model buffer size = 31070.97 MiB
+0.12.938.879 I load_tensors:        ROCm3 model buffer size = 30278.43 MiB
+0.12.938.881 I load_tensors: RPC0[192.168.2.4:50052] model buffer size = 30614.97 MiB
+0.12.938.883 I load_tensors: RPC1[192.168.2.4:50052] model buffer size = 31070.97 MiB
+0.12.938.885 I load_tensors: RPC2[192.168.2.4:50052] model buffer size = 30614.97 MiB
+0.12.938.886 I load_tensors: RPC3[192.168.2.4:50052] model buffer size = 30614.97 MiB
