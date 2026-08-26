@@ -666,3 +666,37 @@ produced that cell in a run). Past the boundary the GPU wave is
 irrelevant and latency is the serial CPU chain. n=1 is the worst regime:
 the wave is only ~400 µs, so even one miss sticks out (+30%) — one more
 argument for the speculative-verification serving shape.
+
+## GLM-5.2 on the four dies: chat-glm-5.2.sh + MTP speculation (2026-08-25)
+
+`chat-glm-5.2.sh` — the chat.sh equivalent for GLM-5.2 UD-Q3_K_XL (319 GiB,
+arch glm-dsa, 79 blocks: 3 dense + 75 MoE + blk.78 = NextN/MTP with its own
+4.3 GiB of experts). The quant keeps the MTP tensors (eh_proj at Q8_0), and
+llama.cpp's `--spec-type draft-mtp` drafts from the model's own NextN head
+against the target — no draft GGUF, shares the target KV, draft length
+unclamped in this mem-shared mode.
+
+Placement, computed from per-tensor sizes and load-verified to ~0.2 MiB:
+experts are 3984 MiB/layer (exceptions: blk.8 5376, blk.75-77 4872, blk.78
+4368) + 222 MiB attention. The capacity frontier is `-ncmoe 56 -ts 59/7/7/7`
+(23 expert layers in HBM, 53 on CPU; 2.5-3.6 GiB free per die; one more
+layer overflows a die in every arrangement). Two traps, both in the script
+header: `-ts` must align with the ncmoe boundary or die 0 eats expert
+layers it has no room for (the misaligned first attempt OOM'd the 2.5 GiB
+compute buffer); and blk.78 only loads when speculation is on, so
+`SPEC=none` frees 4.6 GiB on die 3.
+
+Measured (one load each, 256-300 token generations): 3.89 t/s no-spec at a
+conservative ncmoe 64; 4.46-4.56 t/s with MTP n_max=3. Acceptance 0.63-0.76
+across runs/prompts (prose lower, same direction as the dspark-tree
+finding), acc/pos ~(0.94, 0.76, 0.58) — the n_max sweep is open, and the
+position-3 rate says deeper drafts may pay here, unlike DSpark's n=3 wall.
+
+The decode cycle, from a 1 kHz CPU+GPU load trace
+(`~/projects/measures/loadtrace`, trace in its results/): a ~600 ms verify
+cycle = ~505 ms CPU phase (14-16 cores streaming the 53 CPU expert layers,
+~9.5 ms/layer, die 0 blipping each layer's attention) + a ~95 ms GPU wave
+(die 0 -> 1 -> 2 -> 3 strictly sequential, ~15-35 ms each, CPU at ~1 core).
+85% of the cycle is CPU expert streaming with all dies idle; during the
+wave, 3 of 4 dies idle — the umbrella overlap and the pipeline gap, both
+now visible per-millisecond.
